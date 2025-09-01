@@ -1,0 +1,150 @@
+{
+  "performance_metrics": {
+    "strategy_return": -0.22166789999999992,
+    "strategy_annual_return": -0.21564311512717316,
+    "excess_return": -0.10829855783893838,
+    "benchmark_return": -0.11336934216106154,
+    "alpha": -0.24564311512717316,
+    "beta": 0.0,
+    "sharpe_ratio": -1.125610648350069,
+    "win_rate": 0.25,
+    "profit_loss_ratio": 0.07892396064080609,
+    "max_drawdown": 0.22166789999999992,
+    "sortino_ratio": 0,
+    "daily_excess_return": -0.00041653291476514764,
+    "max_drawdown_excess": 0.22166789999999992,
+    "excess_volatility_ratio": -0.49625657059980843,
+    "daily_win_rate": 0.0,
+    "profit_count": 1,
+    "loss_count": 3,
+    "information_ratio": -0.4962565705998085,
+    "strategy_volatility": 0.21823098021259768,
+    "benchmark_volatility": 0.13496556912645508,
+    "max_drawdown_period": "2023-01-02 至 2023-12-29"
+  },
+  "time_period": {
+    "start_date": "20230101",
+    "end_date": "20231231"
+  },
+  "strategy_info": {
+    "name": "指标驱动回测策略",
+    "strategy_type": "equal_weight",
+    "period": "20230101 - 20231231",
+    "start_date": "20230101",
+    "end_date": "20231231",
+    "initial_cash": 100000,
+    "status": "回测完成",
+    "runtime": "00分03秒",
+    "platform": "Python3",
+    "final_value": 77833.21
+  },
+  "trades": [
+    {
+      "stock_code": "000001",
+      "action": "buy",
+      "shares": 1899,
+      "price": 13.16,
+      "amount": 24990.84,
+      "date": "20230101",
+      "trade_time": "2023-01-01T09:30:00",
+      "signal": 15,
+      "signal_type": "rebalance_buy"
+    },
+    {
+      "stock_code": "000002",
+      "action": "buy",
+      "shares": 1373,
+      "price": 18.2,
+      "amount": 24988.6,
+      "date": "20230101",
+      "trade_time": "2023-01-01T09:30:00",
+      "signal": 15,
+      "signal_type": "rebalance_buy"
+    },
+    {
+      "stock_code": "000063",
+      "action": "buy",
+      "shares": 966,
+      "price": 25.86,
+      "amount": 24980.76,
+      "date": "20230101",
+      "trade_time": "2023-01-01T09:30:00",
+      "signal": 15,
+      "signal_type": "rebalance_buy"
+    },
+    {
+      "stock_code": "000568",
+      "action": "buy",
+      "shares": 111,
+      "price": 224.28,
+      "amount": 24895.08,
+      "date": "20230101",
+      "trade_time": "2023-01-01T09:30:00",
+      "signal": 15,
+      "signal_type": "rebalance_buy"
+    },
+    {
+      "stock_code": "000001",
+      "action": "sell",
+      "shares": 1899,
+      "price": 9.39,
+      "amount": 17831.61,
+      "date": "20231231",
+      "trade_time": "2023-12-31T15:00:00",
+      "signal": 16,
+      "signal_type": "end_of_backtest_sell"
+    },
+    {
+      "stock_code": "000002",
+      "action": "sell",
+      "shares": 1373,
+      "price": 10.46,
+      "amount": 14361.580000000002,
+      "date": "20231231",
+      "trade_time": "2023-12-31T15:00:00",
+      "signal": 16,
+      "signal_type": "end_of_backtest_sell"
+    },
+    {
+      "stock_code": "000063",
+      "action": "sell",
+      "shares": 966,
+      "price": 26.48,
+      "amount": 25579.68,
+      "date": "20231231",
+      "trade_time": "2023-12-31T15:00:00",
+      "signal": 16,
+      "signal_type": "end_of_backtest_sell"
+    },
+    {
+      "stock_code": "000568",
+      "action": "sell",
+      "shares": 111,
+      "price": 179.42,
+      "amount": 19915.62,
+      "date": "20231231",
+      "trade_time": "2023-12-31T15:00:00",
+      "signal": 16,
+      "signal_type": "end_of_backtest_sell"
+    }
+  ],
+  "positions": [],
+  "account_summary": {
+    "total_cash": 100000,
+    "invested_amount": 388941.18,
+    "received_amount": 298937.45,
+    "position_count": 4
+  },
+  "performance": {
+    "total_return_pct": "0.00%",
+    "win_rate": "0.00%",
+    "max_drawdown": "31.50%",
+    "sharpe_ratio": "0.07",
+    "total_trades": 24,
+    "initial_cash": 100000,
+    "final_cash": 100000,
+    "annualized_return": "0.00%"
+  },
+  "cache_timestamp": 1754992712.596565,
+  "cache_version": "2.0"
+}

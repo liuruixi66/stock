@@ -1,0 +1,25 @@
+{
+  "analysis_time": "2025-01-15 16:30:00",
+  "original_system": {
+    "return": 0.0,
+    "final_value": 100000.0,
+    "trade_count": 24,
+    "total_buy": 388941.18,
+    "total_sell": 298937.45,
+    "issue": "允许无限透支，资金管理错误"
+  },
+  "fixed_system": {
+    "return": -0.22166789999999995,
+    "final_value": 77833.21,
+    "trade_count": 8,
+    "total_buy": 99855.28,
+    "total_sell": 77688.49,
+    "improvement": "正确的资金约束管理"
+  },
+  "recommendations": [
+    "立即修复 XMS Quant 引擎的资金管理逻辑",
+    "添加资金充足性检查",
+    "重新验证所有历史回测结果",
+    "实施实时风控监控"
+  ]
+}

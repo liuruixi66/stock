@@ -1,0 +1,66 @@
+{
+  "validation_time": "2025-08-12 18:33:15",
+  "system_metrics": {
+    "strategy_return": -0.22166789999999992,
+    "strategy_annual_return": -0.21564311512717316,
+    "excess_return": -0.10829855783893838,
+    "benchmark_return": -0.11336934216106154,
+    "alpha": -0.24564311512717316,
+    "beta": 0.0,
+    "sharpe_ratio": -1.125610648350069,
+    "win_rate": 0.25,
+    "profit_loss_ratio": 0.07892396064080609,
+    "max_drawdown": 0.22166789999999992,
+    "sortino_ratio": 0,
+    "daily_excess_return": -0.00041653291476514764,
+    "max_drawdown_excess": 0.22166789999999992,
+    "excess_volatility_ratio": -0.49625657059980843,
+    "daily_win_rate": 0.0,
+    "profit_count": 1,
+    "loss_count": 3,
+    "information_ratio": -0.4962565705998085,
+    "strategy_volatility": 0.21823098021259768,
+    "benchmark_volatility": 0.13496556912645508,
+    "max_drawdown_period": "2023-01-02 至 2023-12-29"
+  },
+  "calculated_metrics": {
+    "strategy_return": -0.22166789999999995,
+    "annual_return": -0.22166789999999992,
+    "win_rate": 0.25,
+    "max_drawdown": 0.22166789999999995,
+    "profit_loss_ratio": 0.07892396064080609
+  },
+  "validation_results": {
+    "策略收益率": {
+      "系统值": "-22.17%",
+      "验证值": "-22.17%",
+      "状态": "✅ 一致"
+    },
+    "年化收益率": {
+      "系统值": "-21.56%",
+      "验证值": "-22.17%",
+      "状态": "❌ 不一致"
+    },
+    "胜率": {
+      "系统值": "25.00%",
+      "验证值": "25.00%",
+      "状态": "✅ 一致"
+    },
+    "最大回撤": {
+      "系统值": "22.17%",
+      "验证值": "22.17%",
+      "状态": "✅ 一致"
+    },
+    "盈亏比": {
+      "系统值": "0.079",
+      "验证值": "0.079",
+      "状态": "✅ 一致"
+    }
+  },
+  "data_sources": [
+    "系统交易数据",
+    "akshare沪深300指数",
+    "tushare接口"
+  ],
+  "validation_status": "completed"
+}

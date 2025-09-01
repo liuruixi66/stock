@@ -1,0 +1,46 @@
+{
+  "validation_timestamp": "2025-08-12T20:18:45.111852",
+  "current_metrics": {
+    "strategy_return": -0.0551,
+    "annual_return": -3.89,
+    "sharpe_ratio": -0.01,
+    "sortino_ratio": null,
+    "max_drawdown": -5.51,
+    "win_rate": 0.5,
+    "information_ratio": -6.61,
+    "initial_cash": 1000000.0,
+    "trades_count": 44
+  },
+  "corrected_metrics": {
+    "sortino_ratio": -0.36864158869775904,
+    "daily_returns_count": 22,
+    "avg_daily_return": -0.008063543007820239,
+    "volatility": 0.05934869082842506,
+    "excess_return": 0.12576088259828036,
+    "benchmark_return": -0.18086088259828037,
+    "information_ratio": 0.0026522270162211586
+  },
+  "external_validation": {
+    "external_portfolio_return": -0.3119628932816737,
+    "stock_count_validated": 2,
+    "external_stocks": {
+      "000001": {
+        "return": -0.24396135265700478,
+        "start_price": 12.42,
+        "end_price": 9.39,
+        "days": 346
+      },
+      "000002": {
+        "return": -0.3799644339063426,
+        "start_price": 16.87,
+        "end_price": 10.46,
+        "days": 346
+      }
+    }
+  },
+  "validation_summary": {
+    "sortino_ratio_corrected": true,
+    "external_data_available": true,
+    "metrics_reasonable": true
+  }
+}

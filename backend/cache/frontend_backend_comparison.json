@@ -1,0 +1,33 @@
+{
+  "validation_time": "2025-08-12 18:39:57",
+  "backend_data": {
+    "initial_cash": 100000,
+    "strategy_return": -22.166789999999992,
+    "annual_return": -21.564311512717317,
+    "win_rate": 25.0,
+    "max_drawdown": 22.166789999999992,
+    "period": "20230101 - 20231231"
+  },
+  "frontend_displayed": {
+    "initial_cash": 1000000,
+    "strategy_return": -29.36,
+    "annual_return": -16.78,
+    "win_rate": 45.83,
+    "max_drawdown": 29.36,
+    "period": "2022-04-01 至 2023-12-31"
+  },
+  "differences": {
+    "initial_cash_diff": 900000,
+    "return_diff": 7.193210000000008,
+    "annual_return_diff": 4.784311512717316,
+    "winrate_diff": 20.83,
+    "drawdown_diff": 7.193210000000008
+  },
+  "problems_found": [
+    "初始资金不一致: 前端显示1,000,000，后端实际100,000",
+    "收益率差异过大: 前端-29.36% vs 后端-22.17%",
+    "胜率差异过大: 前端45.83% vs 后端25.00%",
+    "时间周期不一致: 前端显示'2022-04-01 至 2023-12-31' vs 后端'20230101 - 20231231'"
+  ],
+  "consistency_status": "inconsistent"
+}

@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>股票筛选器</title>
+    <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: "Microsoft YaHei", sans-serif;
+            background-color: #f5f7fa;
+            color: #333;
+        }
+
+        .page-container {
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .filter-container {
+            flex: 0 0 400px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .selected-conditions {
+            flex: 1;
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .filter-header {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .filter-header i {
+            color: #4a90e2;
+        }
+
+        .filter-section {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .filter-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            padding: 10px 15px;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .filter-title:hover {
+            background-color: #f8f9fa;
+        }
+
+        .filter-count {
+            color: #999;
+            font-size: 12px;
+        }
+
+        .filter-content {
+            padding: 10px 15px;
+        }
+
+        .checkbox-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .custom-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .input-group {
+            margin-top: 10px;
+        }
+
+        .input-group input {
+            border: 1px solid #ddd;
+            padding: 6px 12px;
+            border-radius: 4px;
+            width: 100%;
+            font-size: 14px;
+        }
+
+        .button-group {
+            padding: 15px;
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .btn-reset {
+            padding: 8px 20px;
+            border: 1px solid #ddd;
+            background: white;
+            border-radius: 4px;
+            color: #666;
+        }
+
+        .btn-apply {
+            padding: 8px 20px;
+            background: #4a90e2;
+            border: none;
+            border-radius: 4px;
+            color: white;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+        }
+
+        .chevron {
+            transition: transform 0.3s;
+        }
+
+        .chevron.expanded {
+            transform: rotate(180deg);
+        }
+
+        .conditions-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .condition-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            padding: 8px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+
+        .condition-item .indicator {
+            color: #666;
+            font-weight: 500;
+        }
+
+        .condition-item .operator {
+            color: #999;
+        }
+
+        .condition-item .value {
+            color: #333;
+        }
+
+        .condition-item .remove {
+            margin-left: auto;
+            color: #999;
+            cursor: pointer;
+        }
+
+        .condition-item .remove:hover {
+            color: #666;
+        }
+
+        .condition-item .check {
+            color: #4CAF50;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="page-container">
+        <!-- 左侧筛选器 -->
+        <div class="filter-container">
+            <div class="filter-header">
+                <i class="fas fa-filter"></i>
+                <h5 class="mb-0">菜单功能</h5>
+            </div>
+
+            <!-- 股票价格部分 -->
+            <div class="filter-section">
+                <div class="filter-title" onclick="toggleSection(this)">
+                    <div>
+                        <i class="fas fa-dollar-sign text-primary"></i>
+                        股票价格
+                    </div>
+                    <div>
+                        <span class="filter-count">13</span>
+                        <i class="fas fa-chevron-down chevron"></i>
+                    </div>
+                </div>
+                <div class="filter-content" style="display: none;">
+                    <div class="checkbox-group">
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 开盘价
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 收盘价
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 最高价
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 最低价
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 过滤项部分 -->
+            <div class="filter-section">
+                <div class="filter-title" onclick="toggleSection(this)">
+                    <div>
+                        <i class="fas fa-filter text-warning"></i>
+                        过滤项
+                    </div>
+                    <div>
+                        <span class="filter-count">9</span>
+                        <i class="fas fa-chevron-down chevron"></i>
+                    </div>
+                </div>
+                <div class="filter-content" style="display: none;">
+                    <div class="checkbox-group">
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 过滤新上市股
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 过滤北交所
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 过滤ST
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 过滤停牌
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 过滤科创板
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 过滤创业板
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 财务指标部分 -->
+            <div class="filter-section">
+                <div class="filter-title" onclick="toggleSection(this)">
+                    <div>
+                        <i class="fas fa-chart-line text-success"></i>
+                        财务指标
+                    </div>
+                    <div>
+                        <span class="filter-count">9</span>
+                        <i class="fas fa-chevron-down chevron"></i>
+                    </div>
+                </div>
+                <div class="filter-content" style="display: none;">
+                    <div class="checkbox-group">
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> ROA
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> ROE
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 毛利率
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 净利率
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 营收增长率
+                        </label>
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> 净利润增长率
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MACD指标部分 -->
+            <div class="filter-section">
+                <div class="filter-title" onclick="toggleSection(this)">
+                    <div>
+                        <i class="fas fa-chart-bar text-info"></i>
+                        MACD
+                    </div>
+                    <div>
+                        <i class="fas fa-chevron-down chevron"></i>
+                    </div>
+                </div>
+                <div class="filter-content" style="display: none;">
+                    <div class="input-group">
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> MACD金叉
+                        </label>
+                        <input type="text" placeholder="自定义值">
+                    </div>
+                    <div class="input-group">
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> MACD死叉
+                        </label>
+                        <input type="text" placeholder="自定义值">
+                    </div>
+                    <div class="input-group">
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> MACD顶背离
+                        </label>
+                        <input type="text" placeholder="自定义值">
+                    </div>
+                    <div class="input-group">
+                        <label class="custom-checkbox">
+                            <input type="checkbox"> MACD底背离
+                        </label>
+                        <input type="text" placeholder="自定义值">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 按钮组 -->
+            <div class="button-group">
+                <button class="btn btn-reset">重置</button>
+                <button class="btn btn-apply">应用筛选</button>
+            </div>
+        </div>
+
+        <!-- 右侧已选条件 -->
+        <div class="selected-conditions">
+            <div class="conditions-header">
+                <h6 class="mb-0">选股条件</h6>
+                <button class="btn btn-link p-0 text-decoration-none">排名条件</button>
+            </div>
+
+            <!-- 示例条件项 -->
+            <div class="condition-item">
+                <span class="indicator">开盘价</span>
+                <span class="operator">大于</span>
+                <span class="value">10</span>
+                <i class="fas fa-times remove"></i>
+                <i class="fas fa-check check"></i>
+            </div>
+
+            <div class="condition-item">
+                <span class="indicator">市盈率</span>
+                <span class="operator">小于</span>
+                <span class="value">30</span>
+                <i class="fas fa-times remove"></i>
+                <i class="fas fa-check check"></i>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.bootcdn.net/ajax/libs/font-awesome/5.15.4/js/all.min.js"></script>
+    <script>
+        function toggleSection(element) {
+            const content = element.nextElementSibling;
+            const chevron = element.querySelector('.chevron');
+
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                chevron.classList.add('expanded');
+            } else {
+                content.style.display = 'none';
+                chevron.classList.remove('expanded');
+            }
+        }
+
+        // 添加和删除条件的功能
+        document.addEventListener('DOMContentLoaded', function () {
+            // 删除条件
+            document.querySelectorAll('.remove').forEach(button => {
+                button.addEventListener('click', function () {
+                    this.closest('.condition-item').remove();
+                });
+            });
+
+            // 切换条件状态
+            document.querySelectorAll('.check').forEach(button => {
+                button.addEventListener('click', function () {
+                    this.classList.toggle('text-muted');
+                });
+            });
+        });
+    </script>
+</body>
+
+</html>

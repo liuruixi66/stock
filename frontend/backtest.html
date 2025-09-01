@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>股票筛选回测系统</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+        .section h3 {
+            color: #34495e;
+            margin-top: 0;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            background: #3498db;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #2980b9;
+        }
+        .btn-success {
+            background: #27ae60;
+        }
+        .btn-success:hover {
+            background: #229954;
+        }
+        .results {
+            margin-top: 20px;
+            padding: 20px;
+            background: #ecf0f1;
+            border-radius: 4px;
+            border-left: 4px solid #3498db;
+        }
+        .error {
+            color: #e74c3c;
+            background: #fdf2f2;
+            border-left: 4px solid #e74c3c;
+        }
+        .success {
+            color: #27ae60;
+            background: #f0f9f0;
+            border-left: 4px solid #27ae60;
+        }
+        .indicator-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .indicator-item {
+            display: flex;
+            align-items: center;
+        }
+        .indicator-item input[type="checkbox"] {
+            width: auto;
+            margin-right: 8px;
+        }
+        .condition-input {
+            display: grid;
+            grid-template-columns: 1fr 80px 1fr;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 20px;
+            background: #ecf0f1;
+            border: 1px solid #bdc3c7;
+            cursor: pointer;
+            border-bottom: none;
+        }
+        .tab.active {
+            background: white;
+            border-bottom: 1px solid white;
+            margin-bottom: -1px;
+        }
+        .tab-content {
+            display: none;
+            border: 1px solid #bdc3c7;
+            padding: 20px;
+            background: white;
+        }
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>股票筛选回测系统</h1>
+        
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('filter')">股票筛选</div>
+            <div class="tab" onclick="switchTab('backtest')">回测系统</div>
+            <div class="tab" onclick="switchTab('results')">结果分析</div>
+        </div>
+
+        <!-- 股票筛选标签页 -->
+        <div id="filter-tab" class="tab-content active">
+            <div class="section">
+                <h3>技术指标选择</h3>
+                <div class="indicator-grid">
+                    <div class="indicator-item">
+                        <input type="checkbox" id="macd" value="macd">
+                        <label for="macd">MACD</label>
+                    </div>
+                    <div class="indicator-item">
+                        <input type="checkbox" id="kdj" value="kdj">
+                        <label for="kdj">KDJ</label>
+                    </div>
+                    <div class="indicator-item">
+                        <input type="checkbox" id="ma" value="ma">
+                        <label for="ma">移动平均线</label>
+                    </div>
+                    <div class="indicator-item">
+                        <input type="checkbox" id="macd_cross" value="macd_cross">
+                        <label for="macd_cross">MACD金叉死叉</label>
+                    </div>
+                    <div class="indicator-item">
+                        <input type="checkbox" id="four_ma_long" value="four_ma_long">
+                        <label for="four_ma_long">四线多头排列</label>
+                    </div>
+                    <div class="indicator-item">
+                        <input type="checkbox" id="net_profit" value="net_profit">
+                        <label for="net_profit">净利润</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>筛选条件</h3>
+                <div id="conditions-container">
+                    <div class="condition-input">
+                        <select id="condition-field-1">
+                            <option value="">选择指标</option>
+                            <option value="macd">MACD</option>
+                            <option value="k">KDJ-K</option>
+                            <option value="d">KDJ-D</option>
+                            <option value="j">KDJ-J</option>
+                            <option value="ma">移动平均线</option>
+                            <option value="net_profit">净利润</option>
+                        </select>
+                        <select id="condition-op-1">
+                            <option value=">">大于</option>
+                            <option value="<">小于</option>
+                            <option value=">=">大于等于</option>
+                            <option value="<=">小于等于</option>
+                            <option value="=">=等于</option>
+                        </select>
+                        <input type="number" id="condition-value-1" placeholder="数值">
+                    </div>
+                </div>
+                <button onclick="addCondition()">添加条件</button>
+            </div>
+
+            <div class="section">
+                <h3>回测参数</h3>
+                <div class="form-group">
+                    <label for="start-date">开始日期:</label>
+                    <input type="date" id="start-date" value="2023-01-01">
+                </div>
+                <div class="form-group">
+                    <label for="end-date">结束日期:</label>
+                    <input type="date" id="end-date" value="2024-12-31">
+                </div>
+                <div class="form-group">
+                    <label for="total-cash">初始资金:</label>
+                    <input type="number" id="total-cash" value="100000" min="1000">
+                </div>
+                <div class="form-group">
+                    <label for="data-path">数据路径:</label>
+                    <input type="text" id="data-path" value="/home/liu/桌面/stock-main/backend/000001_10years.csv">
+                </div>
+            </div>
+
+            <button onclick="runFilter()" class="btn-success">运行筛选</button>
+            <button onclick="runBacktest()" class="btn-success">运行回测</button>
+        </div>
+
+        <!-- 回测系统标签页 -->
+        <div id="backtest-tab" class="tab-content">
+            <div class="section">
+                <h3>回测配置</h3>
+                <div class="form-group">
+                    <label for="trader-tool">交易工具:</label>
+                    <select id="trader-tool">
+                        <option value="ths">同花顺</option>
+                        <option value="tdx">通达信</option>
+                        <option value="qmt">QMT</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="data-api">数据接口:</label>
+                    <select id="data-api">
+                        <option value="dfcf">东方财富</option>
+                        <option value="tushare">Tushare</option>
+                        <option value="akshare">AKShare</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="data-type">数据周期:</label>
+                    <select id="data-type">
+                        <option value="D">日线</option>
+                        <option value="W">周线</option>
+                        <option value="M">月线</option>
+                        <option value="60">60分钟</option>
+                        <option value="30">30分钟</option>
+                        <option value="15">15分钟</option>
+                        <option value="5">5分钟</option>
+                        <option value="1">1分钟</option>
+                    </select>
+                </div>
+            </div>
+            
+            <button onclick="loadBacktestConfig()">加载默认配置</button>
+            <button onclick="runAdvancedBacktest()" class="btn-success">运行高级回测</button>
+        </div>
+
+        <!-- 结果分析标签页 -->
+        <div id="results-tab" class="tab-content">
+            <div class="section">
+                <h3>回测结果</h3>
+                <div id="backtest-results">
+                    <p>请先运行回测以查看结果</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 结果显示区域 -->
+        <div id="results" class="results" style="display:none;">
+            <h3>筛选/回测结果</h3>
+            <div id="results-content"></div>
+        </div>
+    </div>
+
+    <script>
+        let conditionCount = 1;
+
+        function switchTab(tab) {
+            // 隐藏所有标签页内容
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // 移除所有标签的active状态
+            document.querySelectorAll('.tab').forEach(t => {
+                t.classList.remove('active');
+            });
+            
+            // 显示选中的标签页
+            document.getElementById(tab + '-tab').classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        function addCondition() {
+            conditionCount++;
+            const container = document.getElementById('conditions-container');
+            const newCondition = document.createElement('div');
+            newCondition.className = 'condition-input';
+            newCondition.innerHTML = `
+                <select id="condition-field-${conditionCount}">
+                    <option value="">选择指标</option>
+                    <option value="macd">MACD</option>
+                    <option value="k">KDJ-K</option>
+                    <option value="d">KDJ-D</option>
+                    <option value="j">KDJ-J</option>
+                    <option value="ma">移动平均线</option>
+                    <option value="net_profit">净利润</option>
+                </select>
+                <select id="condition-op-${conditionCount}">
+                    <option value=">">大于</option>
+                    <option value="<">小于</option>
+                    <option value=">=">大于等于</option>
+                    <option value="<=">小于等于</option>
+                    <option value="=">=等于</option>
+                </select>
+                <input type="number" id="condition-value-${conditionCount}" placeholder="数值">
+            `;
+            container.appendChild(newCondition);
+        }
+
+        function collectFormData() {
+            // 收集选中的指标
+            const indicators = [];
+            document.querySelectorAll('.indicator-item input[type="checkbox"]:checked').forEach(cb => {
+                indicators.push(cb.value);
+            });
+
+            // 收集筛选条件
+            const conditions = {};
+            for (let i = 1; i <= conditionCount; i++) {
+                const field = document.getElementById(`condition-field-${i}`)?.value;
+                const op = document.getElementById(`condition-op-${i}`)?.value;
+                const value = document.getElementById(`condition-value-${i}`)?.value;
+                
+                if (field && op && value) {
+                    conditions[field] = {
+                        op: op,
+                        value: parseFloat(value)
+                    };
+                }
+            }
+
+            return {
+                indicators: indicators,
+                conditions: conditions,
+                start_date: document.getElementById('start-date').value.replace(/-/g, ''),
+                end_date: document.getElementById('end-date').value.replace(/-/g, ''),
+                total_cash: parseInt(document.getElementById('total-cash').value),
+                data_path: document.getElementById('data-path').value
+            };
+        }
+
+        function showResults(data, isError = false) {
+            const resultsDiv = document.getElementById('results');
+            const contentDiv = document.getElementById('results-content');
+            
+            resultsDiv.style.display = 'block';
+            resultsDiv.className = isError ? 'results error' : 'results success';
+            
+            if (isError) {
+                contentDiv.innerHTML = `<p>错误: ${data}</p>`;
+            } else {
+                let html = '<h4>筛选结果</h4>';
+                
+                if (data.filtered_stocks) {
+                    html += `<p>筛选出 ${data.filtered_stocks.length} 只股票:</p>`;
+                    html += `<p>${data.filtered_stocks.join(', ')}</p>`;
+                }
+                
+                if (data.backtest_results) {
+                    html += '<h4>回测结果</h4>';
+                    const bt = data.backtest_results;
+                    html += `<p>初始资金: ¥${bt.performance_metrics?.initial_cash || 0}</p>`;
+                    html += `<p>交易记录: ${bt.trade_records?.length || 0} 条</p>`;
+                    html += `<p>策略类型: ${bt.performance_metrics?.strategy_type || '未知'}</p>`;
+                    
+                    if (bt.trade_records && bt.trade_records.length > 0) {
+                        html += '<h5>交易详情:</h5>';
+                        html += '<table border="1" style="width:100%; border-collapse: collapse;">';
+                        html += '<tr><th>股票代码</th><th>操作</th><th>金额</th><th>日期</th></tr>';
+                        bt.trade_records.forEach(trade => {
+                            html += `<tr>
+                                <td>${trade.stock_code}</td>
+                                <td>${trade.action}</td>
+                                <td>¥${trade.amount}</td>
+                                <td>${trade.date}</td>
+                            </tr>`;
+                        });
+                        html += '</table>';
+                    }
+                }
+                
+                contentDiv.innerHTML = html;
+            }
+        }
+
+        function showLoading() {
+            const resultsDiv = document.getElementById('results');
+            const contentDiv = document.getElementById('results-content');
+            
+            resultsDiv.style.display = 'block';
+            resultsDiv.className = 'results';
+            contentDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在处理，请稍候...</p></div>';
+        }
+
+        async function runFilter() {
+            const data = collectFormData();
+            
+            if (data.indicators.length === 0) {
+                alert('请至少选择一个技术指标');
+                return;
+            }
+
+            showLoading();
+
+            try {
+                const response = await fetch('/api/filter-stocks/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    showResults({filtered_stocks: result.data?.map(item => item.code || item.stock_code || '未知') || []});
+                } else {
+                    showResults(result.error, true);
+                }
+            } catch (error) {
+                showResults('网络请求失败: ' + error.message, true);
+            }
+        }
+
+        async function runBacktest() {
+            const data = collectFormData();
+            
+            if (data.indicators.length === 0) {
+                alert('请至少选择一个技术指标');
+                return;
+            }
+
+            showLoading();
+
+            try {
+                const response = await fetch('/api/backtest/run/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    showResults(result);
+                    // 同时更新结果分析标签页
+                    updateBacktestResultsTab(result);
+                } else {
+                    showResults(result.error, true);
+                }
+            } catch (error) {
+                showResults('网络请求失败: ' + error.message, true);
+            }
+        }
+
+        function updateBacktestResultsTab(result) {
+            const resultsDiv = document.getElementById('backtest-results');
+            
+            let html = '<h4>详细回测报告</h4>';
+            
+            if (result.strategy_info) {
+                html += '<h5>策略信息:</h5>';
+                html += `<p>使用指标: ${result.strategy_info.indicators.join(', ')}</p>`;
+                html += `<p>回测期间: ${result.strategy_info.period}</p>`;
+                html += `<p>初始资金: ¥${result.strategy_info.total_cash}</p>`;
+            }
+            
+            if (result.filtered_stocks) {
+                html += '<h5>筛选股票:</h5>';
+                html += `<p>共筛选出 ${result.filtered_stocks.length} 只股票</p>`;
+                html += `<p>${result.filtered_stocks.join(', ')}</p>`;
+            }
+            
+            if (result.backtest_results?.performance_metrics) {
+                const metrics = result.backtest_results.performance_metrics;
+                html += '<h5>性能指标:</h5>';
+                html += `<p>策略类型: ${metrics.strategy_type}</p>`;
+                html += `<p>交易股票数: ${metrics.total_stocks}</p>`;
+                html += `<p>回测区间: ${metrics.backtest_period}</p>`;
+            }
+            
+            resultsDiv.innerHTML = html;
+        }
+
+        async function loadBacktestConfig() {
+            try {
+                const response = await fetch('/api/backtest/config/');
+                const result = await response.json();
+                
+                if (result.success && result.data.default_config) {
+                    const config = result.data.default_config;
+                    document.getElementById('trader-tool').value = config.trader_tool;
+                    document.getElementById('data-api').value = config.data_api;
+                    document.getElementById('data-type').value = config.data_type;
+                    
+                    alert('默认配置已加载');
+                }
+            } catch (error) {
+                alert('加载配置失败: ' + error.message);
+            }
+        }
+
+        async function runAdvancedBacktest() {
+            const data = collectFormData();
+            
+            // 添加高级配置
+            data.trader_tool = document.getElementById('trader-tool').value;
+            data.data_api = document.getElementById('data-api').value;
+            data.data_type = document.getElementById('data-type').value;
+            
+            await runBacktest();
+        }
+
+        // 页面加载时设置默认日期
+        window.onload = function() {
+            const today = new Date();
+            const lastYear = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
+            
+            document.getElementById('start-date').value = lastYear.toISOString().split('T')[0];
+            document.getElementById('end-date').value = today.toISOString().split('T')[0];
+        };
+    </script>
+</body>
+</html>
