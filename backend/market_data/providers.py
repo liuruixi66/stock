@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timezone
 from enum import StrEnum
 from functools import lru_cache
+from time import monotonic
 from typing import Any
 
 import requests
@@ -86,12 +87,22 @@ class MarketDataProvider(ABC):
 class AShareProvider(MarketDataProvider):
     market = Market.A_SHARE
 
+    def __init__(self) -> None:
+        self._spot_frame = None
+        self._spot_loaded_at = 0.0
+
+    def _get_spot_frame(self):
+        if self._spot_frame is None or monotonic() - self._spot_loaded_at > 10:
+            import akshare as ak
+
+            self._spot_frame = ak.stock_zh_a_spot_em()
+            self._spot_loaded_at = monotonic()
+        return self._spot_frame
+
     def get_quote(self, symbol: str) -> Quote:
         normalized = symbol.strip().upper().split('.')[0]
         try:
-            import akshare as ak
-
-            spot = ak.stock_zh_a_spot_em()
+            spot = self._get_spot_frame()
             row = spot.loc[spot['代码'].astype(str) == normalized]
             if row.empty:
                 raise MarketDataError(f'未找到A股代码: {symbol}')

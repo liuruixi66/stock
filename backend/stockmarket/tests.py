@@ -48,7 +48,7 @@ class PaperTradingTests(TestCase):
         self.assertEqual(position.quantity, 100)
         self.assertLess(self.account.cash, Decimal('99000'))
 
-    def test_a_share_quantity_requires_board_lot(self) -> None:
+    def test_a_share_buy_quantity_requires_board_lot(self) -> None:
         with self.assertRaises(TradingError):
             submit_order(self.account.id, '000001', 'BUY', 1)
 

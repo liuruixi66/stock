@@ -45,8 +45,8 @@ def submit_order(
         raise TradingError('订单方向或类型无效')
     if quantity <= 0:
         raise TradingError('数量必须大于0')
-    if account.market == Market.A_SHARE.value and quantity % 100 != 0:
-        raise TradingError('A股买卖数量必须为100股的整数倍')
+    if account.market == Market.A_SHARE.value and side == 'BUY' and quantity % 100 != 0:
+        raise TradingError('A股买入数量必须为100股的整数倍')
     if order_type == 'LIMIT' and (requested_price is None or requested_price <= 0):
         raise TradingError('限价单必须提供有效价格')
 
@@ -68,6 +68,8 @@ def submit_order(
 
     market_price = Decimal(str(quote.price))
     if order_type == 'LIMIT':
+        if requested_price is None:
+            raise TradingError('限价单必须提供有效价格')
         can_fill = requested_price >= market_price if side == 'BUY' else requested_price <= market_price
         if not can_fill:
             order.message = f'当前价 {market_price} 未触及限价'
