@@ -1,21 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import MenuLayoutRefactored from '@/views/MenuLayoutRefactored.vue'
 import DefaultLayout from '@/layouts/DefaultLayout.vue'
-import StockSpot from '@/views/tables/StockSpot.vue'
-import StockFundFlow from '@/views/tables/StockFundFlow.vue'
-import StockBonus from '@/views/tables/StockBonus.vue'
-import StockBlocktrade from '@/views/tables/StockBlocktrade.vue'
-import IndustryFundFlow from '@/views/tables/IndustryFundFlow.vue'
-import ConceptFundFlow from '@/views/tables/ConceptFundFlow.vue'
-import EtfSpot from '@/views/tables/EtfSpot.vue'
-import StockTop from '@/views/tables/StockTop.vue'
-import Index from '@/views/Index.vue'
-import TechnicalIndicatorDisplay from '@/views/TechnicalIndicatorDisplay.vue'
-import StockRealtime from '@/components/StockRealtime.vue'
-import EarningsOverview from '@/views/EarningsOverview.vue'
-import TransactionDetails from '@/views/TransactionDetails.vue'
-import BacktestDetails from '@/views/BacktestDetails.vue'
-import ResearchTerminal from '@/views/ResearchTerminal.vue'
 
 const router = createRouter({
     history: createWebHistory(import.meta.env.BASE_URL),
@@ -26,54 +10,54 @@ const router = createRouter({
             children: [
                 {
                     path: '',
-                    component: Index
+                    component: () => import('@/views/Index.vue')
                 },
                 {
                     path: 'menu-layout',
-                    component: MenuLayoutRefactored
+                    component: () => import('@/views/MenuLayoutRefactored.vue')
                 },
                 {
                     path: 'tables',
                     children: [
-                        { path: 'stock-spot', component: StockSpot },
-                        { path: 'stock-fund-flow', component: StockFundFlow },
-                        { path: 'stock-bonus', component: StockBonus },
-                        { path: 'stock-top', component: StockTop },
-                        { path: 'stock-blocktrade', component: StockBlocktrade },
-                        { path: 'industry-fund-flow', component: IndustryFundFlow },
-                        { path: 'concept-fund-flow', component: ConceptFundFlow },
-                        { path: 'etf-spot', component: EtfSpot }
+                        { path: 'stock-spot', component: () => import('@/views/tables/StockSpot.vue') },
+                        { path: 'stock-fund-flow', component: () => import('@/views/tables/StockFundFlow.vue') },
+                        { path: 'stock-bonus', component: () => import('@/views/tables/StockBonus.vue') },
+                        { path: 'stock-top', component: () => import('@/views/tables/StockTop.vue') },
+                        { path: 'stock-blocktrade', component: () => import('@/views/tables/StockBlocktrade.vue') },
+                        { path: 'industry-fund-flow', component: () => import('@/views/tables/IndustryFundFlow.vue') },
+                        { path: 'concept-fund-flow', component: () => import('@/views/tables/ConceptFundFlow.vue') },
+                        { path: 'etf-spot', component: () => import('@/views/tables/EtfSpot.vue') }
                     ]
                 },
                 {
                     path: '/technical-indicator-display',
                     name: 'TechnicalIndicatorDisplay',
-                    component: TechnicalIndicatorDisplay
+                    component: () => import('@/views/TechnicalIndicatorDisplay.vue')
                 },
                 {
                     path: '/earnings-overview',
                     name: 'EarningsOverview',
-                    component: EarningsOverview
+                    component: () => import('@/views/EarningsOverview.vue')
                 },
                 {
                     path: '/transaction-details',
                     name: 'TransactionDetails',
-                    component: TransactionDetails
+                    component: () => import('@/views/TransactionDetails.vue')
                 },
                 {
                     path: '/backtest-details',
                     name: 'BacktestDetails',
-                    component: BacktestDetails
+                    component: () => import('@/views/BacktestDetails.vue')
                 },
                 {
                     path: '/stock-realtime',
                     name: 'StockRealtime',
-                    component: StockRealtime
+                    component: () => import('@/components/StockRealtime.vue')
                 },
                 {
                     path: '/research-terminal',
                     name: 'ResearchTerminal',
-                    component: ResearchTerminal
+                    component: () => import('@/views/ResearchTerminal.vue')
                 }
             ]
         }
