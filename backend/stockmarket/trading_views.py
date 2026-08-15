@@ -6,7 +6,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from market_data import MarketDataError, get_provider
-from .models import SimulationAccount, SimulationOrder
+from .models import ResearchRun, SimulationAccount, SimulationOrder, WatchlistItem
 from .paper_trading import TradingError, create_account, submit_order
 from .quant_research import ResearchError, run_sma_cross
 
@@ -74,6 +74,7 @@ def orders(request):
             'quantity': item.quantity,
             'requested_price': float(item.requested_price) if item.requested_price is not None else None,
             'executed_price': float(item.executed_price) if item.executed_price is not None else None,
+            'amount': float(item.executed_price * item.quantity) if item.executed_price is not None else None,
             'commission': float(item.commission),
             'tax': float(item.tax),
             'status': item.status,
@@ -151,6 +152,105 @@ def research_backtest(request):
             slippage_bps=float(data.get('slippage_bps', 2)),
         )
         result.update({'symbol': data['symbol'].upper(), 'market': data.get('market', 'A').upper()})
+        run = ResearchRun.objects.create(
+            market=result['market'],
+            symbol=result['symbol'],
+            strategy='sma_cross',
+            parameters={
+                'short_window': int(data.get('short_window', 5)),
+                'long_window': int(data.get('long_window', 20)),
+                'initial_cash': float(data.get('initial_cash', 100000)),
+                'commission_rate': float(data.get('commission_rate', 0.0003)),
+                'slippage_bps': float(data.get('slippage_bps', 2)),
+            },
+            start_date=start,
+            end_date=end,
+            total_return=result['total_return'],
+            max_drawdown=result['max_drawdown'],
+            sharpe_ratio=result['sharpe_ratio'],
+            trade_count=result['trade_count'],
+            trades=result['trades'],
+        )
+        result['run_id'] = run.id
         return JsonResponse({'success': True, 'data': result})
     except (KeyError, ValueError, ResearchError, MarketDataError) as exc:
         return JsonResponse({'success': False, 'error': str(exc)}, status=400)
+
+
+def _research_run_data(run: ResearchRun) -> dict:
+    return {
+        'id': run.id,
+        'market': run.market,
+        'symbol': run.symbol,
+        'strategy': run.strategy,
+        'parameters': run.parameters,
+        'start_date': run.start_date.isoformat(),
+        'end_date': run.end_date.isoformat(),
+        'total_return': run.total_return,
+        'max_drawdown': run.max_drawdown,
+        'sharpe_ratio': run.sharpe_ratio,
+        'trade_count': run.trade_count,
+        'trades': run.trades,
+        'created_at': run.created_at.isoformat(),
+    }
+
+
+def research_runs(request):
+    queryset = ResearchRun.objects.all()
+    if request.GET.get('market'):
+        queryset = queryset.filter(market=request.GET['market'].upper())
+    if request.GET.get('symbol'):
+        queryset = queryset.filter(symbol=request.GET['symbol'].upper())
+    return JsonResponse({'success': True, 'data': [_research_run_data(item) for item in queryset[:50]]})
+
+
+def research_run_detail(request, run_id: int):
+    try:
+        run = ResearchRun.objects.get(pk=run_id)
+    except ResearchRun.DoesNotExist:
+        return JsonResponse({'success': False, 'error': '研究记录不存在'}, status=404)
+    return JsonResponse({'success': True, 'data': _research_run_data(run)})
+
+
+@csrf_exempt
+def watchlist(request):
+    if request.method == 'GET':
+        queryset = WatchlistItem.objects.all()
+        if request.GET.get('market'):
+            queryset = queryset.filter(market=request.GET['market'].upper())
+        data = [{
+            'id': item.id,
+            'market': item.market,
+            'symbol': item.symbol,
+            'name': item.name,
+            'note': item.note,
+        } for item in queryset]
+        return JsonResponse({'success': True, 'data': data})
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
+    data = json.loads(request.body or '{}')
+    market = str(data.get('market', 'A')).upper()
+    symbol = str(data.get('symbol', '')).strip().upper()
+    if market not in ('A', 'US'):
+        return JsonResponse({'success': False, 'error': '市场只支持 A 或 US'}, status=400)
+    if not symbol:
+        return JsonResponse({'success': False, 'error': '请填写股票代码'}, status=400)
+    item, created = WatchlistItem.objects.get_or_create(
+        market=market,
+        symbol=symbol,
+        defaults={'name': str(data.get('name', '')).strip(), 'note': str(data.get('note', '')).strip()},
+    )
+    return JsonResponse(
+        {'success': True, 'data': {'id': item.id, 'market': item.market, 'symbol': item.symbol, 'name': item.name, 'note': item.note}},
+        status=201 if created else 200,
+    )
+
+
+@csrf_exempt
+def watchlist_item(request, item_id: int):
+    if request.method != 'DELETE':
+        return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
+    deleted, _ = WatchlistItem.objects.filter(pk=item_id).delete()
+    if not deleted:
+        return JsonResponse({'success': False, 'error': '自选股不存在'}, status=404)
+    return JsonResponse({'success': True})

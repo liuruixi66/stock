@@ -535,3 +535,41 @@ class SimulationOrder(models.Model):
     class Meta:
         db_table = 'simulation_order'
         ordering = ['-created_at']
+
+
+class WatchlistItem(models.Model):
+    MARKET_CHOICES = [('A', 'A股'), ('US', '美股')]
+
+    market = models.CharField('市场', max_length=2, choices=MARKET_CHOICES)
+    symbol = models.CharField('股票代码', max_length=20)
+    name = models.CharField('名称', max_length=60, blank=True)
+    note = models.CharField('备注', max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'watchlist_item'
+        ordering = ['market', 'symbol']
+        constraints = [
+            models.UniqueConstraint(fields=['market', 'symbol'], name='unique_watchlist_symbol')
+        ]
+
+
+class ResearchRun(models.Model):
+    """每次量化研究回测的过程留痕"""
+
+    market = models.CharField('市场', max_length=2)
+    symbol = models.CharField('股票代码', max_length=20)
+    strategy = models.CharField('策略', max_length=40, default='sma_cross')
+    parameters = models.JSONField('参数', default=dict)
+    start_date = models.DateField('起始日期')
+    end_date = models.DateField('结束日期')
+    total_return = models.FloatField('总收益率')
+    max_drawdown = models.FloatField('最大回撤')
+    sharpe_ratio = models.FloatField('夏普比率')
+    trade_count = models.PositiveIntegerField('成交次数')
+    trades = models.JSONField('模拟成交明细', default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'research_run'
+        ordering = ['-created_at']

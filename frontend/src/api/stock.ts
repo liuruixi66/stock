@@ -21,6 +21,15 @@ export const researchApi = {
     getQuotes: (market: 'A' | 'US', symbols: string) =>
         api.get('/market/quotes/', { params: { market, symbols } }),
     runBacktest: (data: any) => api.post('/research/backtest/', data),
+    getRuns: (market?: 'A' | 'US') => api.get('/research/runs/', { params: { market } }),
+    getRun: (runId: number) => api.get(`/research/runs/${runId}/`),
+}
+
+export const watchlistApi = {
+    list: (market?: 'A' | 'US') => api.get('/watchlist/', { params: { market } }),
+    add: (data: { market: 'A' | 'US'; symbol: string; name?: string; note?: string }) =>
+        api.post('/watchlist/', data),
+    remove: (itemId: number) => api.delete(`/watchlist/${itemId}/`),
 }
 
 export const paperTradingApi = {

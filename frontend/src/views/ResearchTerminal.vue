@@ -30,6 +30,17 @@
 
     <p v-if="error" class="error-banner">{{ error }}</p>
 
+    <section class="watchlist-strip">
+      <span class="strip-title">自选股</span>
+      <button v-for="item in marketWatchlist" :key="item.id" class="watch-chip" @click="useWatchSymbol(item.symbol)">
+        {{ item.symbol }}<em v-if="item.name">{{ item.name }}</em>
+        <i class="remove" title="移除自选" @click.stop="removeWatch(item.id)">×</i>
+      </button>
+      <span v-if="!marketWatchlist.length" class="strip-empty">暂无自选股，先添加一个</span>
+      <input v-model="newWatchSymbol" class="watch-input" placeholder="添加代码" @keyup.enter="addWatch" />
+      <button class="command ghost" @click="addWatch">加入自选</button>
+    </section>
+
     <div class="workspace-grid">
       <section class="research-panel">
         <div class="panel-heading">
