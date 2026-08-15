@@ -14,7 +14,5 @@ urlpatterns = [
     path('api/watchlist/', trading_views.watchlist, name='watchlist'),
     path('api/watchlist/<int:item_id>/', trading_views.watchlist_item, name='watchlist_item'),
     path('api/cache/backtest-details/', cache_views.get_backtest_details_cache, name='cache_backtest_details'),
-    path('api/cache/earnings-overview/', cache_views.get_earnings_overview_cache, name='cache_earnings_overview'),
-    path('api/cache/transaction-details/', cache_views.get_transaction_details_cache, name='cache_transaction_details'),
     path('api/cache/status/', cache_views.get_cache_status, name='cache_status'),
 ]

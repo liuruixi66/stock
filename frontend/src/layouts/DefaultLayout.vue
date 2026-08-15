@@ -74,10 +74,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 
 const route = useRoute()
-const router = useRouter()
 
 const isSidebarCollapsed = ref(false)
 const openSections = ref<boolean[]>([true, true, true, true, true])
@@ -182,12 +181,7 @@ const isMenuItemActive = (item: MenuItem) => {
 }
 
 const toggleSection = (index: number) => {
-  // 如果是选股中心(index为2)，则直接导航到对应页面
-  if (index === 2) {
-    router.push('/menu-layout')
-  } else {
-    openSections.value[index] = !openSections.value[index]
-  }
+  openSections.value[index] = !openSections.value[index]
 }
 
 const toggleSubMenu = (section: any, itemIndex: number) => {

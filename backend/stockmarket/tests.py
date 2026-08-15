@@ -5,7 +5,8 @@ from unittest.mock import patch
 from django.test import TestCase
 
 from market_data import HistoricalBar, Market, Quote
-from .models import SimulationAccount, SimulationPosition
+from .analytics import build_account_analytics
+from .models import SimulationAccount, SimulationOrder, SimulationPosition
 from .paper_trading import TradingError, submit_order
 from .quant_research import run_sma_cross
 
@@ -51,6 +52,43 @@ class PaperTradingTests(TestCase):
     def test_a_share_buy_quantity_requires_board_lot(self) -> None:
         with self.assertRaises(TradingError):
             submit_order(self.account.id, '000001', 'BUY', 1)
+
+
+class AnalyticsTests(TestCase):
+    def setUp(self) -> None:
+        self.account = SimulationAccount.objects.create(
+            name='分析账户',
+            market='A',
+            currency='CNY',
+            initial_cash=Decimal('100000'),
+            cash=Decimal('100000'),
+        )
+
+    def _order(self, side: str, price: str, quantity: int, commission: str) -> None:
+        SimulationOrder.objects.create(
+            account=self.account,
+            symbol='000001',
+            side=side,
+            order_type='MARKET',
+            quantity=quantity,
+            executed_price=Decimal(price),
+            commission=Decimal(commission),
+            status='FILLED',
+        )
+
+    @patch('stockmarket.analytics.get_provider', return_value=FakeProvider())
+    def test_fifo_pairs_sells_against_earliest_buys(self, _provider) -> None:
+        self._order('BUY', '10', 100, '3')
+        self._order('BUY', '12', 100, '3')
+        self._order('SELL', '14', 100, '4')
+
+        result = build_account_analytics(self.account)
+        sell = next(item for item in result['trades'] if item['side'] == 'SELL')
+
+        # 卖出 14*100-4 = 1396，配对首笔买入成本 10*100+3 = 1003
+        self.assertAlmostEqual(sell['realized_pnl'], 393.0, places=4)
+        self.assertEqual(result['summary']['closed_count'], 1)
+        self.assertEqual(result['summary']['win_rate'], 100.0)
 
 
 class QuantResearchTests(TestCase):
