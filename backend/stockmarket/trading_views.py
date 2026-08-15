@@ -1,4 +1,5 @@
 import json
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.http import JsonResponse
@@ -7,6 +8,7 @@ from django.views.decorators.csrf import csrf_exempt
 from market_data import MarketDataError, get_provider
 from .models import SimulationAccount, SimulationOrder
 from .paper_trading import TradingError, create_account, submit_order
+from .quant_research import ResearchError, run_sma_cross
 
 
 def _account_data(account: SimulationAccount) -> dict:
@@ -128,3 +130,27 @@ def account_summary(request, account_id: int):
         'total_return': float((total_assets / account.initial_cash - 1) * 100),
         'positions': positions,
     }})
+
+
+@csrf_exempt
+def research_backtest(request):
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
+    try:
+        data = json.loads(request.body or '{}')
+        end = date.fromisoformat(data.get('end_date', date.today().isoformat()))
+        start = date.fromisoformat(data.get('start_date', (end - timedelta(days=730)).isoformat()))
+        provider = get_provider(data.get('market', 'A'))
+        bars = provider.get_history(data['symbol'], start, end)
+        result = run_sma_cross(
+            bars=bars,
+            initial_cash=float(data.get('initial_cash', 100000)),
+            short_window=int(data.get('short_window', 5)),
+            long_window=int(data.get('long_window', 20)),
+            commission_rate=float(data.get('commission_rate', 0.0003)),
+            slippage_bps=float(data.get('slippage_bps', 2)),
+        )
+        result.update({'symbol': data['symbol'].upper(), 'market': data.get('market', 'A').upper()})
+        return JsonResponse({'success': True, 'data': result})
+    except (KeyError, ValueError, ResearchError, MarketDataError) as exc:
+        return JsonResponse({'success': False, 'error': str(exc)}, status=400)

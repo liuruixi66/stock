@@ -13,6 +13,7 @@ urlpatterns = [
     path('api/paper/accounts/', trading_views.accounts, name='paper_accounts'),
     path('api/paper/orders/', trading_views.orders, name='paper_orders'),
     path('api/paper/accounts/<int:account_id>/summary/', trading_views.account_summary, name='paper_account_summary'),
+    path('api/research/backtest/', trading_views.research_backtest, name='research_backtest'),
     path('api/stocks/', csrf_exempt(views.stock_list), name='stock_list'),
     path('api/stock-data/', csrf_exempt(views.stock_data), name='stock_data'),
     path('api/indicators/', csrf_exempt(views.indicators), name='indicators'),

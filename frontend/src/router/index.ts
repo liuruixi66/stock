@@ -16,6 +16,7 @@ import StockRealtime from '@/components/StockRealtime.vue'
 import EarningsOverview from '@/views/EarningsOverview.vue'
 import TransactionDetails from '@/views/TransactionDetails.vue'
 import BacktestDetails from '@/views/BacktestDetails.vue'
+import ResearchTerminal from '@/views/ResearchTerminal.vue'
 
 const router = createRouter({
     history: createWebHistory(import.meta.env.BASE_URL),
@@ -73,6 +74,11 @@ const router = createRouter({
                     path: '/stock-realtime',
                     name: 'StockRealtime',
                     component: StockRealtime
+                },
+                {
+                    path: '/research-terminal',
+                    name: 'ResearchTerminal',
+                    component: ResearchTerminal
                 }
             ]
         }

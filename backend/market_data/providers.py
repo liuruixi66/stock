@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from enum import StrEnum
 from functools import lru_cache
 from typing import Any
@@ -53,6 +53,21 @@ class Quote:
         return data
 
 
+@dataclass(frozen=True)
+class HistoricalBar:
+    date: date
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data['date'] = self.date.isoformat()
+        return data
+
+
 class MarketDataProvider(ABC):
     market: Market
 
@@ -62,6 +77,10 @@ class MarketDataProvider(ABC):
 
     def get_quotes(self, symbols: list[str]) -> list[Quote]:
         return [self.get_quote(symbol) for symbol in symbols]
+
+    @abstractmethod
+    def get_history(self, symbol: str, start: date, end: date) -> list[HistoricalBar]:
+        raise NotImplementedError
 
 
 class AShareProvider(MarketDataProvider):
@@ -97,6 +116,31 @@ class AShareProvider(MarketDataProvider):
             raise MarketDataError('A股数据源不可用，请安装 akshare') from exc
         except Exception as exc:
             raise MarketDataError(f'A股行情获取失败: {exc}') from exc
+
+    def get_history(self, symbol: str, start: date, end: date) -> list[HistoricalBar]:
+        normalized = symbol.strip().upper().split('.')[0]
+        try:
+            import akshare as ak
+
+            frame = ak.stock_zh_a_hist(
+                symbol=normalized,
+                period='daily',
+                start_date=start.strftime('%Y%m%d'),
+                end_date=end.strftime('%Y%m%d'),
+                adjust='qfq',
+            )
+            return [HistoricalBar(
+                date=datetime.strptime(str(row['日期'])[:10], '%Y-%m-%d').date(),
+                open=float(row['开盘']),
+                high=float(row['最高']),
+                low=float(row['最低']),
+                close=float(row['收盘']),
+                volume=int(float(row['成交量'])),
+            ) for _, row in frame.iterrows()]
+        except ImportError as exc:
+            raise MarketDataError('A股数据源不可用，请安装 akshare') from exc
+        except Exception as exc:
+            raise MarketDataError(f'A股历史行情获取失败: {exc}') from exc
 
 
 class YahooFinanceProvider(MarketDataProvider):
@@ -140,6 +184,39 @@ class YahooFinanceProvider(MarketDataProvider):
             raise
         except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
             raise MarketDataError(f'美股行情获取失败: {exc}') from exc
+
+    def get_history(self, symbol: str, start: date, end: date) -> list[HistoricalBar]:
+        normalized = symbol.strip().upper()
+        try:
+            response = self.session.get(
+                self.endpoint.format(symbol=normalized),
+                params={
+                    'interval': '1d',
+                    'period1': int(datetime.combine(start, time.min, timezone.utc).timestamp()),
+                    'period2': int(datetime.combine(end, time.max, timezone.utc).timestamp()),
+                },
+                headers={'User-Agent': 'stock-research-platform/1.0'},
+                timeout=8,
+            )
+            response.raise_for_status()
+            result = response.json()['chart']['result'][0]
+            timestamps = result['timestamp']
+            values = result['indicators']['quote'][0]
+            bars = []
+            for index, timestamp in enumerate(timestamps):
+                if values['close'][index] is None:
+                    continue
+                bars.append(HistoricalBar(
+                    date=datetime.fromtimestamp(timestamp, timezone.utc).date(),
+                    open=float(values['open'][index]),
+                    high=float(values['high'][index]),
+                    low=float(values['low'][index]),
+                    close=float(values['close'][index]),
+                    volume=int(values['volume'][index] or 0),
+                ))
+            return bars
+        except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
+            raise MarketDataError(f'美股历史行情获取失败: {exc}') from exc
 
 
 @lru_cache(maxsize=2)

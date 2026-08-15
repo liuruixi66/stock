@@ -71,6 +71,20 @@ export const backtestApi = {
     getBacktestConfig: () => api.get('/backtest/config/'),
 }
 
+export const researchApi = {
+    getQuotes: (market: 'A' | 'US', symbols: string) =>
+        api.get('/market/quotes/', { params: { market, symbols } }),
+    runBacktest: (data: any) => api.post('/research/backtest/', data),
+}
+
+export const paperTradingApi = {
+    getAccounts: () => api.get('/paper/accounts/'),
+    createAccount: (data: any) => api.post('/paper/accounts/', data),
+    getSummary: (accountId: number) => api.get(`/paper/accounts/${accountId}/summary/`),
+    getOrders: (accountId?: number) => api.get('/paper/orders/', { params: { account_id: accountId } }),
+    submitOrder: (data: any) => api.post('/paper/orders/', data),
+}
+
 // 兼容旧版本的API（用于向后兼容）
 export const getStockData = (name: string, date: string) => {
     return stockApi.getStockSpot({ name, date })

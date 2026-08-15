@@ -139,6 +139,11 @@ const menuSections = ref<MenuSection[]>([
     title: '策略管理',
     icon: 'fa fa-area-chart',
     items: [
+      {
+        name: '量化研究交易台',
+        path: '/research-terminal',
+        isOpen: false,
+      },
       { 
         name: '策略选股', 
         path: '/menu-layout',
