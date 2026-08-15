@@ -97,10 +97,11 @@ import * as echarts from 'echarts'
 import { paperTradingApi, researchApi } from '@/api/stock'
 
 type Market = 'A' | 'US'
+interface PaperAccount { id: number; name: string; market: Market; currency: string }
 const market = ref<Market>('A')
 const symbols = ref('000001,600519')
 const quotes = ref<any[]>([])
-const accounts = ref<any[]>([])
+const accounts = ref<PaperAccount[]>([])
 const selectedAccountId = ref<number>()
 const summary = ref<any>()
 const backtest = ref<any>()
@@ -113,7 +114,7 @@ let chart: echarts.ECharts | undefined
 
 const research = reactive({ symbol: '000001', short_window: 5, long_window: 20, initial_cash: 100000 })
 const order = reactive<any>({ symbol: '000001', side: 'BUY', quantity: 100, order_type: 'MARKET', price: null })
-const marketAccounts = ref<any[]>([])
+const marketAccounts = ref<PaperAccount[]>([])
 
 function showError(value: any) {
   error.value = value?.response?.data?.error || value?.message || '请求失败'
