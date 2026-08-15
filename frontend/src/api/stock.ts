@@ -37,6 +37,5 @@ export const paperTradingApi = {
     createAccount: (data: any) => api.post('/paper/accounts/', data),
     getSummary: (accountId: number) => api.get(`/paper/accounts/${accountId}/summary/`),
     getAnalytics: (accountId: number) => api.get(`/paper/accounts/${accountId}/analytics/`),
-    getOrders: (accountId?: number) => api.get('/paper/orders/', { params: { account_id: accountId } }),
     submitOrder: (data: any) => api.post('/paper/orders/', data),
 }
