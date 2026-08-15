@@ -1,6 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import MenuLayoutRefactored from '@/views/MenuLayoutRefactored.vue'
-import MenuLayout from '@/views/MenuLayout.vue'
 import DefaultLayout from '@/layouts/DefaultLayout.vue'
 import StockSpot from '@/views/tables/StockSpot.vue'
 import StockFundFlow from '@/views/tables/StockFundFlow.vue'
@@ -32,10 +31,6 @@ const router = createRouter({
                 {
                     path: 'menu-layout',
                     component: MenuLayoutRefactored
-                },
-                {
-                    path: 'menu-layout-old',
-                    component: MenuLayout
                 },
                 {
                     path: 'tables',
