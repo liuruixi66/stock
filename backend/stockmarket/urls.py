@@ -7,6 +7,7 @@ urlpatterns = [
     path('api/paper/accounts/', trading_views.accounts, name='paper_accounts'),
     path('api/paper/orders/', trading_views.orders, name='paper_orders'),
     path('api/paper/accounts/<int:account_id>/summary/', trading_views.account_summary, name='paper_account_summary'),
+    path('api/paper/accounts/<int:account_id>/analytics/', trading_views.account_analytics, name='paper_account_analytics'),
     path('api/research/backtest/', trading_views.research_backtest, name='research_backtest'),
     path('api/research/runs/', trading_views.research_runs, name='research_runs'),
     path('api/research/runs/<int:run_id>/', trading_views.research_run_detail, name='research_run_detail'),

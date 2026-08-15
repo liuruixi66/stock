@@ -6,6 +6,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from market_data import MarketDataError, get_provider
+from .analytics import build_account_analytics
 from .models import ResearchRun, SimulationAccount, SimulationOrder, WatchlistItem
 from .paper_trading import TradingError, create_account, submit_order
 from .quant_research import ResearchError, run_sma_cross
@@ -131,6 +132,14 @@ def account_summary(request, account_id: int):
         'total_return': float((total_assets / account.initial_cash - 1) * 100),
         'positions': positions,
     }})
+
+
+def account_analytics(request, account_id: int):
+    try:
+        account = SimulationAccount.objects.get(pk=account_id)
+    except SimulationAccount.DoesNotExist:
+        return JsonResponse({'success': False, 'error': '账户不存在'}, status=404)
+    return JsonResponse({'success': True, 'data': build_account_analytics(account)})
 
 
 @csrf_exempt
