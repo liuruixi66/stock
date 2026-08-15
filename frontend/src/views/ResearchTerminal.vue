@@ -150,7 +150,7 @@ function drawChart() {
 }
 async function loadAccounts() { accounts.value = (await paperTradingApi.getAccounts()).data.data; syncMarketAccounts() }
 function syncMarketAccounts() {
-  marketAccounts.value = accounts.value.filter(item => item.market === market.value)
+  marketAccounts.value = accounts.value.filter((item: PaperAccount) => item.market === market.value)
   selectedAccountId.value = marketAccounts.value[0]?.id
   summary.value = undefined
   if (selectedAccountId.value) loadAccount()

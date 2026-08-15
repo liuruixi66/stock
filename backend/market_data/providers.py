@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timezone
 from enum import StrEnum
 from functools import lru_cache
+from importlib import import_module
 from time import monotonic
 from typing import Any
 
@@ -90,12 +91,18 @@ class AShareProvider(MarketDataProvider):
     def __init__(self) -> None:
         self._spot_frame = None
         self._spot_loaded_at = 0.0
+        self._spot_source = 'akshare/eastmoney'
 
     def _get_spot_frame(self):
         if self._spot_frame is None or monotonic() - self._spot_loaded_at > 10:
-            import akshare as ak
+            ak = import_module('akshare')
 
-            self._spot_frame = ak.stock_zh_a_spot_em()
+            try:
+                self._spot_frame = ak.stock_zh_a_spot_em()
+                self._spot_source = 'akshare/eastmoney'
+            except Exception:
+                self._spot_frame = ak.stock_zh_a_spot()
+                self._spot_source = 'akshare/sina'
             self._spot_loaded_at = monotonic()
         return self._spot_frame
 
@@ -103,7 +110,8 @@ class AShareProvider(MarketDataProvider):
         normalized = symbol.strip().upper().split('.')[0]
         try:
             spot = self._get_spot_frame()
-            row = spot.loc[spot['代码'].astype(str) == normalized]
+            codes = spot['代码'].astype(str).str.extract(r'(\d{6})', expand=False)
+            row = spot.loc[codes == normalized]
             if row.empty:
                 raise MarketDataError(f'未找到A股代码: {symbol}')
             item = row.iloc[0]
@@ -119,7 +127,7 @@ class AShareProvider(MarketDataProvider):
                 volume=int(float(item['成交量'])),
                 currency='CNY',
                 timestamp=datetime.now(timezone.utc),
-                source='akshare/eastmoney',
+                source=self._spot_source,
             )
         except MarketDataError:
             raise
@@ -131,7 +139,7 @@ class AShareProvider(MarketDataProvider):
     def get_history(self, symbol: str, start: date, end: date) -> list[HistoricalBar]:
         normalized = symbol.strip().upper().split('.')[0]
         try:
-            import akshare as ak
+            ak = import_module('akshare')
 
             frame = ak.stock_zh_a_hist(
                 symbol=normalized,
