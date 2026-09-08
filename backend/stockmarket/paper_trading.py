@@ -22,7 +22,11 @@ def create_account(name: str, market: str, initial_cash: Decimal) -> SimulationA
     return SimulationAccount.objects.create(
         name=name,
         market=normalized_market.value,
-        currency='CNY' if normalized_market == Market.A_SHARE else 'USD',
+        currency={
+            Market.A_SHARE: 'CNY',
+            Market.US: 'USD',
+            Market.CRYPTO: 'USDT',
+        }[normalized_market],
         initial_cash=initial_cash,
         cash=initial_cash,
     )
@@ -33,7 +37,7 @@ def submit_order(
     account_id: int,
     symbol: str,
     side: str,
-    quantity: int,
+    quantity: Decimal,
     order_type: str = 'MARKET',
     requested_price: Decimal | None = None,
 ) -> SimulationOrder:
@@ -45,6 +49,8 @@ def submit_order(
         raise TradingError('订单方向或类型无效')
     if quantity <= 0:
         raise TradingError('数量必须大于0')
+    if account.market == Market.A_SHARE.value and quantity % 1 != 0:
+        raise TradingError('A股数量必须为整数')
     if account.market == Market.A_SHARE.value and side == 'BUY' and quantity % 100 != 0:
         raise TradingError('A股买入数量必须为100股的整数倍')
     if order_type == 'LIMIT' and (requested_price is None or requested_price <= 0):

@@ -3,11 +3,12 @@
     <header class="terminal-header">
       <div>
         <span class="eyebrow">QUANT RESEARCH DESK</span>
-        <h1>A股与美股研究交易台</h1>
+        <h1>多市场研究交易台</h1>
       </div>
       <div class="market-toggle" role="group" aria-label="市场">
         <button :class="{ active: market === 'A' }" @click="switchMarket('A')">A股</button>
         <button :class="{ active: market === 'US' }" @click="switchMarket('US')">美股</button>
+        <button :class="{ active: market === 'CRYPTO' }" @click="switchMarket('CRYPTO')">虚拟货币</button>
       </div>
     </header>
 
@@ -68,7 +69,7 @@
         <div class="panel-heading"><div><span>PAPER EXECUTION</span><h2>模拟盘</h2></div></div>
         <div v-if="!accounts.length" class="empty-account">
           <input v-model="newAccountName" placeholder="研究账户名称" />
-          <button class="command" @click="createAccount">创建 {{ market === 'A' ? 'CNY' : 'USD' }} 账户</button>
+          <button class="command" @click="createAccount">创建 {{ accountCurrency }} 账户</button>
         </div>
         <template v-else>
           <label class="account-select">模拟账户
@@ -84,7 +85,7 @@
           <div class="order-ticket">
             <div class="side-toggle"><button :class="{ active: order.side === 'BUY' }" @click="order.side = 'BUY'">买入</button><button :class="{ active: order.side === 'SELL' }" @click="order.side = 'SELL'">卖出</button></div>
             <label>代码<input v-model="order.symbol" /></label>
-            <label>数量<input v-model.number="order.quantity" type="number" :step="market === 'A' ? 100 : 1" min="1" /></label>
+            <label>数量<input v-model.number="order.quantity" type="number" :step="market === 'A' ? 100 : market === 'CRYPTO' ? 0.0001 : 1" :min="market === 'CRYPTO' ? 0.00000001 : 1" /></label>
             <label>订单类型<select v-model="order.order_type"><option value="MARKET">市价单</option><option value="LIMIT">限价单</option></select></label>
             <label v-if="order.order_type === 'LIMIT'">限价<input v-model.number="order.price" type="number" step="0.01" /></label>
             <button class="submit-order" @click="submitOrder">提交模拟订单</button>
@@ -144,12 +145,12 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import * as echarts from 'echarts'
 import { paperTradingApi, researchApi, watchlistApi } from '@/api/stock'
 
-type Market = 'A' | 'US'
+type Market = 'A' | 'US' | 'CRYPTO'
 interface PaperAccount { id: number; name: string; market: Market; currency: string }
 interface WatchItem { id: number; market: Market; symbol: string; name: string }
 const market = ref<Market>('A')
@@ -184,16 +185,17 @@ function formatTime(value: string) {
 }
 function switchMarket(value: Market) {
   market.value = value
-  symbols.value = value === 'A' ? '000001,600519' : 'AAPL,MSFT'
-  research.symbol = value === 'A' ? '000001' : 'AAPL'
+  symbols.value = value === 'A' ? '000001,600519' : value === 'US' ? 'AAPL,MSFT' : 'BTCUSDT,ETHUSDT'
+  research.symbol = value === 'A' ? '000001' : value === 'US' ? 'AAPL' : 'BTCUSDT'
   order.symbol = research.symbol
-  order.quantity = value === 'A' ? 100 : 10
-  newAccountName.value = value === 'A' ? 'A股研究账户' : '美股研究账户'
+  order.quantity = value === 'A' ? 100 : value === 'US' ? 10 : 0.01
+  newAccountName.value = value === 'A' ? 'A股研究账户' : value === 'US' ? '美股研究账户' : '虚拟货币研究账户'
   syncMarketAccounts()
   syncMarketWatchlist()
   loadQuotes()
   loadRuns()
 }
+const accountCurrency = computed(() => market.value === 'A' ? 'CNY' : market.value === 'US' ? 'USD' : 'USDT')
 async function loadWatchlist() {
   try { watchlist.value = (await watchlistApi.list()).data.data; syncMarketWatchlist() }
   catch (value) { showError(value) }

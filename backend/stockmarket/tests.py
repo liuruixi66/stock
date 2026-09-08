@@ -53,6 +53,22 @@ class PaperTradingTests(TestCase):
         with self.assertRaises(TradingError):
             submit_order(self.account.id, '000001', 'BUY', 1)
 
+    @patch('stockmarket.paper_trading.get_provider', return_value=FakeProvider())
+    def test_crypto_order_allows_fractional_quantity(self, _provider) -> None:
+        account = SimulationAccount.objects.create(
+            name='虚拟货币研究账户',
+            market='CRYPTO',
+            currency='USDT',
+            initial_cash=Decimal('100000'),
+            cash=Decimal('100000'),
+        )
+
+        order = submit_order(account.id, 'BTCUSDT', 'BUY', Decimal('0.25'))
+
+        position = SimulationPosition.objects.get(account=account, symbol='BTCUSDT')
+        self.assertEqual(order.status, 'FILLED')
+        self.assertEqual(position.quantity, Decimal('0.25'))
+
 
 class AnalyticsTests(TestCase):
     def setUp(self) -> None:

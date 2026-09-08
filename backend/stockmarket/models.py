@@ -483,10 +483,10 @@ class StockHistoryData(models.Model):
 
 
 class SimulationAccount(models.Model):
-    MARKET_CHOICES = [('A', 'A股'), ('US', '美股')]
+    MARKET_CHOICES = [('A', 'A股'), ('US', '美股'), ('CRYPTO', '虚拟货币')]
 
     name = models.CharField('账户名称', max_length=80, unique=True)
-    market = models.CharField('市场', max_length=2, choices=MARKET_CHOICES)
+    market = models.CharField('市场', max_length=6, choices=MARKET_CHOICES)
     currency = models.CharField('币种', max_length=3)
     initial_cash = models.DecimalField('初始资金', max_digits=20, decimal_places=4)
     cash = models.DecimalField('可用资金', max_digits=20, decimal_places=4)
@@ -502,7 +502,7 @@ class SimulationAccount(models.Model):
 class SimulationPosition(models.Model):
     account = models.ForeignKey(SimulationAccount, on_delete=models.CASCADE, related_name='positions')
     symbol = models.CharField('股票代码', max_length=20)
-    quantity = models.PositiveIntegerField('持仓数量')
+    quantity = models.DecimalField('持仓数量', max_digits=24, decimal_places=8)
     average_price = models.DecimalField('平均成本', max_digits=20, decimal_places=4)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -522,7 +522,7 @@ class SimulationOrder(models.Model):
     symbol = models.CharField('股票代码', max_length=20)
     side = models.CharField('方向', max_length=4, choices=SIDE_CHOICES)
     order_type = models.CharField('订单类型', max_length=6, choices=TYPE_CHOICES)
-    quantity = models.PositiveIntegerField('数量')
+    quantity = models.DecimalField('数量', max_digits=24, decimal_places=8)
     requested_price = models.DecimalField('委托价格', max_digits=20, decimal_places=4, null=True, blank=True)
     executed_price = models.DecimalField('成交价格', max_digits=20, decimal_places=4, null=True, blank=True)
     commission = models.DecimalField('佣金', max_digits=20, decimal_places=4, default=0)
@@ -538,9 +538,9 @@ class SimulationOrder(models.Model):
 
 
 class WatchlistItem(models.Model):
-    MARKET_CHOICES = [('A', 'A股'), ('US', '美股')]
+    MARKET_CHOICES = [('A', 'A股'), ('US', '美股'), ('CRYPTO', '虚拟货币')]
 
-    market = models.CharField('市场', max_length=2, choices=MARKET_CHOICES)
+    market = models.CharField('市场', max_length=6, choices=MARKET_CHOICES)
     symbol = models.CharField('股票代码', max_length=20)
     name = models.CharField('名称', max_length=60, blank=True)
     note = models.CharField('备注', max_length=200, blank=True)
@@ -557,7 +557,7 @@ class WatchlistItem(models.Model):
 class ResearchRun(models.Model):
     """每次量化研究回测的过程留痕"""
 
-    market = models.CharField('市场', max_length=2)
+    market = models.CharField('市场', max_length=6)
     symbol = models.CharField('股票代码', max_length=20)
     strategy = models.CharField('策略', max_length=40, default='sma_cross')
     parameters = models.JSONField('参数', default=dict)

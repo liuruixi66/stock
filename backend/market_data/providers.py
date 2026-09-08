@@ -15,6 +15,7 @@ import requests
 class Market(StrEnum):
     A_SHARE = 'A'
     US = 'US'
+    CRYPTO = 'CRYPTO'
 
 
 class MarketDataError(RuntimeError):
@@ -238,7 +239,79 @@ class YahooFinanceProvider(MarketDataProvider):
             raise MarketDataError(f'美股历史行情获取失败: {exc}') from exc
 
 
-@lru_cache(maxsize=2)
+class BinanceProvider(MarketDataProvider):
+    """Binance 公共现货行情，读取行情不需要 API 密钥。"""
+
+    market = Market.CRYPTO
+    ticker_endpoint = 'https://api.binance.com/api/v3/ticker/24hr'
+    klines_endpoint = 'https://api.binance.com/api/v3/klines'
+
+    def __init__(self, session: requests.Session | None = None) -> None:
+        self.session = session or requests.Session()
+
+    @staticmethod
+    def _normalize_symbol(symbol: str) -> str:
+        return symbol.strip().upper().replace('-', '').replace('/', '')
+
+    def get_quote(self, symbol: str) -> Quote:
+        normalized = self._normalize_symbol(symbol)
+        try:
+            response = self.session.get(
+                self.ticker_endpoint,
+                params={'symbol': normalized},
+                headers={'User-Agent': 'stock-research-platform/1.0'},
+                timeout=8,
+            )
+            response.raise_for_status()
+            item = response.json()
+            close = float(item['lastPrice'])
+            timestamp = datetime.fromtimestamp(int(item['closeTime']) / 1000, timezone.utc)
+            return Quote(
+                symbol=normalized,
+                market=self.market,
+                name=normalized,
+                price=close,
+                previous_close=float(item['prevClosePrice']),
+                open=float(item['openPrice']),
+                high=float(item['highPrice']),
+                low=float(item['lowPrice']),
+                volume=int(float(item['volume'])),
+                currency='USDT',
+                timestamp=timestamp,
+                source='binance',
+            )
+        except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
+            raise MarketDataError(f'加密货币行情获取失败: {exc}') from exc
+
+    def get_history(self, symbol: str, start: date, end: date) -> list[HistoricalBar]:
+        normalized = self._normalize_symbol(symbol)
+        try:
+            response = self.session.get(
+                self.klines_endpoint,
+                params={
+                    'symbol': normalized,
+                    'interval': '1d',
+                    'startTime': int(datetime.combine(start, time.min, timezone.utc).timestamp() * 1000),
+                    'endTime': int(datetime.combine(end, time.max, timezone.utc).timestamp() * 1000),
+                    'limit': 1000,
+                },
+                headers={'User-Agent': 'stock-research-platform/1.0'},
+                timeout=8,
+            )
+            response.raise_for_status()
+            return [HistoricalBar(
+                date=datetime.fromtimestamp(int(item[0]) / 1000, timezone.utc).date(),
+                open=float(item[1]),
+                high=float(item[2]),
+                low=float(item[3]),
+                close=float(item[4]),
+                volume=int(float(item[5])),
+            ) for item in response.json()]
+        except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
+            raise MarketDataError(f'加密货币历史行情获取失败: {exc}') from exc
+
+
+@lru_cache(maxsize=3)
 def get_provider(market: Market | str) -> MarketDataProvider:
     try:
         normalized = Market(str(market).upper())
@@ -246,4 +319,6 @@ def get_provider(market: Market | str) -> MarketDataProvider:
         raise MarketDataError(f'不支持的市场: {market}') from exc
     if normalized == Market.A_SHARE:
         return AShareProvider()
-    return YahooFinanceProvider()
+    if normalized == Market.US:
+        return YahooFinanceProvider()
+    return BinanceProvider()

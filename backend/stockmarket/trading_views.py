@@ -91,7 +91,7 @@ def orders(request):
             account_id=int(data['account_id']),
             symbol=data['symbol'],
             side=data['side'],
-            quantity=int(data['quantity']),
+            quantity=Decimal(str(data['quantity'])),
             order_type=data.get('order_type', 'MARKET'),
             requested_price=Decimal(str(data['price'])) if data.get('price') is not None else None,
         )
@@ -240,8 +240,8 @@ def watchlist(request):
     data = json.loads(request.body or '{}')
     market = str(data.get('market', 'A')).upper()
     symbol = str(data.get('symbol', '')).strip().upper()
-    if market not in ('A', 'US'):
-        return JsonResponse({'success': False, 'error': '市场只支持 A 或 US'}, status=400)
+    if market not in ('A', 'US', 'CRYPTO'):
+        return JsonResponse({'success': False, 'error': '市场只支持 A、US 或 CRYPTO'}, status=400)
     if not symbol:
         return JsonResponse({'success': False, 'error': '请填写股票代码'}, status=400)
     item, created = WatchlistItem.objects.get_or_create(

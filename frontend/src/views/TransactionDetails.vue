@@ -8,7 +8,7 @@
       <div class="header-actions">
         <select v-model.number="accountId" @change="loadAnalytics">
           <option v-for="item in accounts" :key="item.id" :value="item.id">
-            {{ item.name }}（{{ item.market === 'A' ? 'A股' : '美股' }}）
+            {{ item.name }}（{{ item.market === 'A' ? 'A股' : item.market === 'US' ? '美股' : '虚拟货币' }}）
           </option>
         </select>
         <button class="ghost-btn" :disabled="loading" @click="loadAnalytics">
@@ -102,7 +102,7 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { paperTradingApi } from '@/api/stock'
 
-interface PaperAccount { id: number; name: string; market: 'A' | 'US' }
+interface PaperAccount { id: number; name: string; market: 'A' | 'US' | 'CRYPTO' }
 
 const accounts = ref<PaperAccount[]>([])
 const accountId = ref<number>()

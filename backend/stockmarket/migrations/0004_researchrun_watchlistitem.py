@@ -22,7 +22,7 @@ class Migration(migrations.Migration):
                         verbose_name="ID",
                     ),
                 ),
-                ("market", models.CharField(max_length=2, verbose_name="市场")),
+                ("market", models.CharField(max_length=6, verbose_name="市场")),
                 ("symbol", models.CharField(max_length=20, verbose_name="股票代码")),
                 (
                     "strategy",
@@ -60,8 +60,8 @@ class Migration(migrations.Migration):
                 (
                     "market",
                     models.CharField(
-                        choices=[("A", "A股"), ("US", "美股")],
-                        max_length=2,
+                        choices=[("A", "A股"), ("US", "美股"), ("CRYPTO", "虚拟货币")],
+                        max_length=6,
                         verbose_name="市场",
                     ),
                 ),
@@ -85,5 +85,24 @@ class Migration(migrations.Migration):
                     )
                 ],
             },
+        ),
+        migrations.AlterField(
+            model_name="simulationaccount",
+            name="market",
+            field=models.CharField(
+                choices=[("A", "A股"), ("US", "美股"), ("CRYPTO", "虚拟货币")],
+                max_length=6,
+                verbose_name="市场",
+            ),
+        ),
+        migrations.AlterField(
+            model_name="simulationorder",
+            name="quantity",
+            field=models.DecimalField(decimal_places=8, max_digits=24, verbose_name="数量"),
+        ),
+        migrations.AlterField(
+            model_name="simulationposition",
+            name="quantity",
+            field=models.DecimalField(decimal_places=8, max_digits=24, verbose_name="持仓数量"),
         ),
     ]

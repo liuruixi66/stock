@@ -171,6 +171,7 @@
             <select v-model="watchForm.market">
               <option value="A">A股</option>
               <option value="US">美股</option>
+              <option value="CRYPTO">虚拟货币</option>
             </select>
             <input v-model="watchForm.symbol" placeholder="代码，如 600519 / AAPL" @keyup.enter="addWatch" />
             <input v-model="watchForm.name" placeholder="名称（选填）" />
@@ -203,10 +204,10 @@ import { watchlistApi } from '@/api/stock'
 
 const route = useRoute()
 
-interface WatchItem { id: number; market: 'A' | 'US'; symbol: string; name: string; note: string }
+interface WatchItem { id: number; market: 'A' | 'US' | 'CRYPTO'; symbol: string; name: string; note: string }
 
 const watchlist = ref<WatchItem[]>([])
-const watchForm = reactive<{ market: 'A' | 'US'; symbol: string; name: string }>({ market: 'A', symbol: '', name: '' })
+const watchForm = reactive<{ market: 'A' | 'US' | 'CRYPTO'; symbol: string; name: string }>({ market: 'A', symbol: '', name: '' })
 const watchLoading = ref(false)
 const watchError = ref('')
 

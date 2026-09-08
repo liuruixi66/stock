@@ -1,5 +1,7 @@
 import axios from 'axios'
 
+export type Market = 'A' | 'US' | 'CRYPTO'
+
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
     timeout: 45000,
@@ -18,16 +20,16 @@ api.interceptors.response.use(
 )
 
 export const researchApi = {
-    getQuotes: (market: 'A' | 'US', symbols: string) =>
+    getQuotes: (market: Market, symbols: string) =>
         api.get('/market/quotes/', { params: { market, symbols } }),
     runBacktest: (data: any) => api.post('/research/backtest/', data),
-    getRuns: (market?: 'A' | 'US') => api.get('/research/runs/', { params: { market } }),
+    getRuns: (market?: Market) => api.get('/research/runs/', { params: { market } }),
     getRun: (runId: number) => api.get(`/research/runs/${runId}/`),
 }
 
 export const watchlistApi = {
-    list: (market?: 'A' | 'US') => api.get('/watchlist/', { params: { market } }),
-    add: (data: { market: 'A' | 'US'; symbol: string; name?: string; note?: string }) =>
+    list: (market?: Market) => api.get('/watchlist/', { params: { market } }),
+    add: (data: { market: Market; symbol: string; name?: string; note?: string }) =>
         api.post('/watchlist/', data),
     remove: (itemId: number) => api.delete(`/watchlist/${itemId}/`),
 }
