@@ -4,11 +4,9 @@
 
 本项目是一套基于 **Django 5 + Vue 3 + ECharts** 的全栈金融量化投研、技术指标信号计算、策略回测、资金风控以及模拟/实盘交易系统。
 
-系统融合了两大量化投研体系：
+系统提供量化投研与模拟交易能力：
 
 1. **轻量级动态投研与模拟交易体系**：支持 A股/美股 跨市场多数据源实时行情、交互式均线交叉/多因子量化回测、资金净值曲线计算、账户资产组合管理与带原子并发锁的模拟撮合引擎。
-2. **西蒙斯（XMS）多指标量化回测体系**：支持 50+ 技术指标信号库（MACD/均线多空/智能组合/ST/分红/异动等）、多股票池批量回测、全周期日历对齐、回测收益缓存预热以及深度性能归因（夏普比率、最大回撤、胜率等）。
-
 ---
 
 ## 🏗️ 2. 系统架构与数据流图
@@ -37,7 +35,6 @@ graph TD
         MD_Engine[多市场行情接入引擎 providers.py]
         PT_Engine[模拟撮合与风控结算引擎 paper_trading.py]
         QR_Engine[SMA/因子动态回测引擎 quant_research.py]
-        XMS_Engine[XMS西蒙斯量化回测系统 xms_quant_remastered.py]
         Signal_Lib[技术指标与信号生成库 signal_library.py]
         Metrics_Mod[高级绩效与归因分析 advanced_metrics.py]
         Cache_Mod[回测缓存与数据校验 cache_views.py]
@@ -64,7 +61,6 @@ graph TD
 
     MD_Engine --> Source_AKShare & Source_Yahoo
     QR_Engine --> Signal_Lib & Metrics_Mod
-    XMS_Engine --> Signal_Lib & Metrics_Mod
     PT_Engine --> MD_Engine & DB_SQLite
     Adapter_Mod --> Trader_QMT
     Cache_Mod --> Cache_JSON
@@ -160,7 +156,6 @@ stock-clone/
 │   │   └── providers.py                # AShareProvider (Akshare) & YahooFinanceProvider
 │   │
 │   ├── signal_library.py               # 交易信号库 (基础突破/MACD金叉/均线多空/智能组合)
-│   ├── xms_quant_remastered.py         # 西蒙斯多股票池量化回测引擎 (现代重构版)
 │   ├── advanced_metrics.py             # 高级绩效度量模块 (夏普比率/最大回撤/胜率等)
 │   ├── trade_analysis.py               # 交易记录分组与统计分析
 │   ├── cache_views.py                  # 回测结果缓存读取与前端数据适配 API
@@ -245,7 +240,7 @@ SIGNAL_CODES = {
 
 ### 5.3 双轨量化回测引擎与绩效计算
 
-系统提供两套针对不同场景的回测引擎：
+系统提供以下量化回测与绩效分析能力：
 
 #### 1. 动态 SMA 交叉投研回测引擎 ([backend/stockmarket/quant_research.py](backend/stockmarket/quant_research.py))
 
@@ -253,13 +248,7 @@ SIGNAL_CODES = {
 - **滑点与交易摩擦**: 买入执行价 $P_{buy} = P_{close} \times (1 + slip)$，卖出执行价 $P_{sell} = P_{close} \times (1 - slip)$，扣除佣金 $Commission = Amount \times rate$。
 - **回测留痕**: 执行完毕后将回测参数、指标及明细自动持久化至 [backend/stockmarket/models.py](backend/stockmarket/models.py) 中的 `ResearchRun` 表，返回全局唯一 `run_id`。
 
-#### 2. 西蒙斯多标的综合量化回测系统 ([backend/xms_quant_remastered.py](backend/xms_quant_remastered.py))
-
-- 面向多股票池进行横截面选股与轮动回测。
-- 支持等权重模式（Equal Weight）与技术指标驱动权重模式（Indicator Driven）。
-- 整合日历对齐算法与多标的持仓平衡。
-
-#### 3. 绩效度量数学公式与实现 ([backend/advanced_metrics.py](backend/advanced_metrics.py))
+#### 2. 绩效度量数学公式与实现 ([backend/advanced_metrics.py](backend/advanced_metrics.py))
 
 - **总收益率 ($TotalReturn$)**:
 
