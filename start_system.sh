@@ -11,9 +11,12 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# 项目路径
-BACKEND_DIR="/home/liu/桌面/stock-main/backend"
-FRONTEND_DIR="/home/liu/桌面/stock-main/frontend"
+# 项目路径：根据脚本位置自动定位，适用于 macOS/Linux
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_DIR="$PROJECT_DIR/backend"
+FRONTEND_DIR="$PROJECT_DIR/frontend"
+PYTHON_BIN="$BACKEND_DIR/.venv/bin/python"
+PIP_BIN="$BACKEND_DIR/.venv/bin/pip"
 
 # 日志函数
 log_info() {
@@ -60,30 +63,26 @@ start_backend() {
     cd "$BACKEND_DIR"
     
     # 检查虚拟环境
-    if [ ! -d "venv" ]; then
+    if [ ! -x "$PYTHON_BIN" ]; then
         log_info "创建Python虚拟环境..."
-        python3 -m venv venv
+        python3 -m venv "$BACKEND_DIR/.venv"
     fi
-    
-    # 激活虚拟环境
-    source venv/bin/activate
     
     # 安装依赖
     log_info "安装Python依赖..."
-    pip install -r requirements.txt 2>/dev/null || {
+    "$PIP_BIN" install -r "$BACKEND_DIR/requirements.txt" 2>/dev/null || {
         log_warn "requirements.txt 不存在，安装基础依赖..."
-        pip install django django-cors-headers pymysql pandas numpy
+        "$PIP_BIN" install django django-cors-headers pymysql pandas numpy
     }
     
     # 数据库迁移
     log_info "执行数据库迁移..."
-    cd myproject
-    python manage.py makemigrations
-    python manage.py migrate
+    cd "$BACKEND_DIR"
+    "$PYTHON_BIN" manage.py migrate
     
     # 启动Django服务器
     log_info "启动Django服务器 (端口 8002)..."
-    python manage.py runserver 0.0.0.0:8002 &
+    "$PYTHON_BIN" manage.py runserver 0.0.0.0:8002 &
     BACKEND_PID=$!
     
     log_info "后端服务已启动 (PID: $BACKEND_PID)"
