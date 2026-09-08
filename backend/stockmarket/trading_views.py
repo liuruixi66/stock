@@ -42,6 +42,34 @@ def market_quotes(request):
         return JsonResponse({'success': False, 'error': str(exc)}, status=400)
 
 
+def market_history(request):
+    market = request.GET.get('market', 'A')
+    symbol = request.GET.get('symbol', '').strip()
+    if not symbol:
+        return JsonResponse({'success': False, 'error': '请提供标的代码'}, status=400)
+    try:
+        end = date.fromisoformat(request.GET.get('end_date', date.today().isoformat()))
+        start = date.fromisoformat(
+            request.GET.get('start_date', (end - timedelta(days=730)).isoformat())
+        )
+        if start > end:
+            return JsonResponse({'success': False, 'error': '开始日期不能晚于结束日期'}, status=400)
+        bars = get_provider(market).get_history(symbol, start, end)
+        return JsonResponse({
+            'success': True,
+            'data': {
+                'market': market.upper(),
+                'symbol': symbol.upper(),
+                'start_date': start.isoformat(),
+                'end_date': end.isoformat(),
+                'source': get_provider(market).__class__.__name__,
+                'bars': [bar.to_dict() for bar in bars],
+            },
+        })
+    except (ValueError, MarketDataError) as exc:
+        return JsonResponse({'success': False, 'error': str(exc)}, status=400)
+
+
 @csrf_exempt
 def accounts(request):
     if request.method == 'GET':

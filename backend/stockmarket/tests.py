@@ -3,6 +3,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.urls import reverse
 
 from market_data import HistoricalBar, Market, Quote
 from .analytics import build_account_analytics
@@ -68,6 +69,32 @@ class PaperTradingTests(TestCase):
         position = SimulationPosition.objects.get(account=account, symbol='BTCUSDT')
         self.assertEqual(order.status, 'FILLED')
         self.assertEqual(position.quantity, Decimal('0.25'))
+
+
+class MarketHistoryApiTests(TestCase):
+    @patch('stockmarket.trading_views.get_provider')
+    def test_history_endpoint_returns_normalized_remote_bars(self, get_provider_mock) -> None:
+        class HistoryProvider:
+            def get_history(self, symbol, start, end):
+                return [HistoricalBar(
+                    date=date(2025, 1, 2),
+                    open=10,
+                    high=11,
+                    low=9,
+                    close=10.5,
+                    volume=1000,
+                )]
+
+        get_provider_mock.return_value = HistoryProvider()
+        response = self.client.get(reverse('market_history'), {
+            'market': 'US',
+            'symbol': 'AAPL',
+            'start_date': '2025-01-01',
+            'end_date': '2025-01-31',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['data']['bars'][0]['close'], 10.5)
 
 
 class AnalyticsTests(TestCase):
