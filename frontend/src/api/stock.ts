@@ -28,6 +28,7 @@ export const researchApi = {
             timeout: 120000,
         }),
     runBacktest: (data: any) => api.post('/research/backtest/', data, { timeout: 120000 }),
+    runPortfolioBacktest: (data: any) => api.post('/research/portfolio-backtest/', data, { timeout: 120000 }),
     getRuns: (market?: Market) => api.get('/research/runs/', { params: { market } }),
     getRun: (runId: number) => api.get(`/research/runs/${runId}/`),
 }

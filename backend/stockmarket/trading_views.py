@@ -9,7 +9,7 @@ from market_data import MarketDataError, get_provider
 from .analytics import build_account_analytics
 from .models import ResearchRun, SimulationAccount, SimulationOrder, WatchlistItem
 from .paper_trading import TradingError, create_account, submit_order
-from .quant_research import ResearchError, run_sma_cross
+from .quant_research import ResearchError, run_portfolio_baseline, run_sma_cross
 
 
 def _account_data(account: SimulationAccount) -> dict:
@@ -216,6 +216,47 @@ def research_backtest(request):
         result['run_id'] = run.id
         return JsonResponse({'success': True, 'data': result})
     except (KeyError, ValueError, ResearchError, MarketDataError) as exc:
+        return JsonResponse({'success': False, 'error': str(exc)}, status=400)
+
+
+@csrf_exempt
+def portfolio_backtest(request):
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
+    try:
+        data = json.loads(request.body or '{}')
+        market = data.get('market', 'A').upper()
+        symbols = data.get('symbols', [])
+        if isinstance(symbols, str):
+            symbols = [item.strip() for item in symbols.split(',') if item.strip()]
+        symbols = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
+        if not symbols or len(symbols) > 20:
+            return JsonResponse({'success': False, 'error': '请提供1至20个组合标的'}, status=400)
+        end = date.fromisoformat(data.get('end_date', date.today().isoformat()))
+        start = date.fromisoformat(data.get('start_date', (end - timedelta(days=730)).isoformat()))
+        if start > end:
+            return JsonResponse({'success': False, 'error': '开始日期不能晚于结束日期'}, status=400)
+        provider = get_provider(market)
+        bars_by_symbol = {
+            symbol: provider.get_history(symbol, start, end)
+            for symbol in symbols
+        }
+        result = run_portfolio_baseline(
+            bars_by_symbol=bars_by_symbol,
+            initial_cash=float(data.get('initial_cash', 100000)),
+            strategy=str(data.get('strategy', 'equal_weight')).lower(),
+            lookback=int(data['lookback']) if data.get('lookback') is not None else None,
+            transaction_cost_bps=float(data.get('transaction_cost_bps', 2)),
+        )
+        result.update({
+            'market': market,
+            'data_source': provider.__class__.__name__,
+            'data_counts': {symbol: len(bars) for symbol, bars in bars_by_symbol.items()},
+            'start_date': start.isoformat(),
+            'end_date': end.isoformat(),
+        })
+        return JsonResponse({'success': True, 'data': result})
+    except (KeyError, TypeError, ValueError, ResearchError, MarketDataError) as exc:
         return JsonResponse({'success': False, 'error': str(exc)}, status=400)
 
 

@@ -9,7 +9,7 @@ from market_data import HistoricalBar, Market, Quote
 from .analytics import build_account_analytics
 from .models import SimulationAccount, SimulationOrder, SimulationPosition
 from .paper_trading import TradingError, submit_order
-from .quant_research import run_sma_cross
+from .quant_research import run_portfolio_baseline, run_sma_cross
 
 
 class FakeProvider:
@@ -96,6 +96,36 @@ class MarketHistoryApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['data']['bars'][0]['close'], 10.5)
 
+    @patch('stockmarket.trading_views.get_provider')
+    def test_portfolio_backtest_endpoint_runs_remote_baseline(self, get_provider_mock) -> None:
+        class PortfolioProvider:
+            def get_history(self, symbol, start, end):
+                prices = [100, 101, 102, 103, 104, 105]
+                return [HistoricalBar(
+                    date=date(2025, 1, 1) + timedelta(days=index),
+                    open=price,
+                    high=price,
+                    low=price,
+                    close=price,
+                    volume=1000,
+                ) for index, price in enumerate(prices)]
+
+        get_provider_mock.return_value = PortfolioProvider()
+        response = self.client.post(
+            reverse('portfolio_backtest'),
+            data={
+                'market': 'US',
+                'symbols': ['AAPL', 'MSFT'],
+                'strategy': 'equal_weight',
+                'lookback': 1,
+            },
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['data']['strategy'], 'equal_weight')
+        self.assertEqual(response.json()['data']['data_counts']['AAPL'], 6)
+
 
 class AnalyticsTests(TestCase):
     def setUp(self) -> None:
@@ -152,3 +182,26 @@ class QuantResearchTests(TestCase):
         self.assertEqual(result['strategy'], 'sma_cross')
         self.assertGreaterEqual(result['trade_count'], 2)
         self.assertEqual(len(result['equity_curve']), len(bars))
+
+    def test_portfolio_baselines_return_metrics_and_weights(self) -> None:
+        start = date(2025, 1, 1)
+        prices_a = [100, 101, 102, 101, 103, 104, 106, 105]
+        prices_b = [100, 99, 98, 100, 99, 101, 100, 102]
+        bars_by_symbol = {
+            'AAA': [HistoricalBar(start + timedelta(days=index), price, price, price, price, 1000)
+                    for index, price in enumerate(prices_a)],
+            'BBB': [HistoricalBar(start + timedelta(days=index), price, price, price, price, 1000)
+                    for index, price in enumerate(prices_b)],
+        }
+
+        for strategy in ('equal_weight', 'risk_parity', 'tsmom'):
+            result = run_portfolio_baseline(
+                bars_by_symbol,
+                initial_cash=100000,
+                strategy=strategy,
+                lookback=2,
+            )
+            self.assertEqual(result['strategy'], strategy)
+            self.assertEqual(len(result['equity_curve']), len(prices_a))
+            self.assertIn('sharpe_ratio', result['metrics'])
+            self.assertTrue(result['weight_history'])
