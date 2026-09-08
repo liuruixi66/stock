@@ -62,6 +62,14 @@
           <article><span>夏普比率</span><strong>{{ backtest.sharpe_ratio }}</strong></article>
           <article><span>成交次数</span><strong>{{ backtest.trade_count }}</strong></article>
         </div>
+        <details v-if="backtest?.historical_data" class="raw-data">
+          <summary>查看回测原始数据（{{ backtest.historical_data.length }} 条）</summary>
+          <div class="raw-data-meta">
+            <span>来源：{{ backtest.data_source }}</span>
+            <span>字段：date / open / high / low / close / volume</span>
+          </div>
+          <pre>{{ formatJson(backtest.historical_data) }}</pre>
+        </details>
         <div ref="chartElement" class="equity-chart"></div>
       </section>
 
@@ -182,6 +190,9 @@ function showError(value: any) {
 }
 function formatTime(value: string) {
   return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
+function formatJson(value: unknown) {
+  return JSON.stringify(value, null, 2)
 }
 function switchMarket(value: Market) {
   market.value = value

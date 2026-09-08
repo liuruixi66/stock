@@ -188,7 +188,12 @@ def research_backtest(request):
             commission_rate=float(data.get('commission_rate', 0.0003)),
             slippage_bps=float(data.get('slippage_bps', 2)),
         )
-        result.update({'symbol': data['symbol'].upper(), 'market': data.get('market', 'A').upper()})
+        result.update({
+            'symbol': data['symbol'].upper(),
+            'market': data.get('market', 'A').upper(),
+            'data_source': provider.__class__.__name__,
+            'historical_data': [bar.to_dict() for bar in bars],
+        })
         run = ResearchRun.objects.create(
             market=result['market'],
             symbol=result['symbol'],
