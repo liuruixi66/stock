@@ -184,6 +184,7 @@ const expandedRunId = ref<number>()
 const research = reactive({ symbol: '000001', short_window: 5, long_window: 20, initial_cash: 100000 })
 const order = reactive<any>({ symbol: '000001', side: 'BUY', quantity: 100, order_type: 'MARKET', price: null })
 const marketAccounts = ref<PaperAccount[]>([])
+let quoteRefreshTimer: ReturnType<typeof setInterval> | undefined
 
 function showError(value: any) {
   error.value = value?.response?.data?.error || value?.message || '请求失败'
@@ -230,6 +231,7 @@ function useWatchSymbol(symbol: string) {
   order.symbol = symbol
 }
 async function loadQuotes() {
+  if (loadingQuotes.value) return
   loadingQuotes.value = true; error.value = ''
   try { quotes.value = (await researchApi.getQuotes(market.value, symbols.value)).data.data }
   catch (value) { showError(value) }
@@ -276,8 +278,15 @@ async function submitOrder() {
   catch (value) { showError(value) }
 }
 function resizeChart() { chart?.resize() }
-onMounted(() => { loadWatchlist(); loadQuotes(); loadAccounts(); loadRuns(); window.addEventListener('resize', resizeChart) })
-onUnmounted(() => { window.removeEventListener('resize', resizeChart); chart?.dispose() })
+onMounted(() => {
+  loadWatchlist(); loadQuotes(); loadAccounts(); loadRuns(); window.addEventListener('resize', resizeChart)
+  quoteRefreshTimer = setInterval(loadQuotes, 30000)
+})
+onUnmounted(() => {
+  if (quoteRefreshTimer) clearInterval(quoteRefreshTimer)
+  window.removeEventListener('resize', resizeChart)
+  chart?.dispose()
+})
 </script>
 
 <style scoped>

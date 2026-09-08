@@ -4,7 +4,7 @@ export type Market = 'A' | 'US' | 'CRYPTO'
 
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
-    timeout: 45000,
+    timeout: 30000,
     headers: {
         'Content-Type': 'application/json',
     }
@@ -23,8 +23,11 @@ export const researchApi = {
     getQuotes: (market: Market, symbols: string) =>
         api.get('/market/quotes/', { params: { market, symbols } }),
     getHistory: (market: Market, symbol: string, start_date?: string, end_date?: string) =>
-        api.get('/market/history/', { params: { market, symbol, start_date, end_date } }),
-    runBacktest: (data: any) => api.post('/research/backtest/', data),
+        api.get('/market/history/', {
+            params: { market, symbol, start_date, end_date },
+            timeout: 120000,
+        }),
+    runBacktest: (data: any) => api.post('/research/backtest/', data, { timeout: 120000 }),
     getRuns: (market?: Market) => api.get('/research/runs/', { params: { market } }),
     getRun: (runId: number) => api.get(`/research/runs/${runId}/`),
 }
