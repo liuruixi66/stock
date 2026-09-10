@@ -38,6 +38,5 @@ def fix_ohlc_data(df):
 4. 定期质量报告
 
 ## 🚀 实施建议
-1. 在`xms_quant_remastered.py`中集成验证逻辑
-2. 在`filter_stocks.py`中添加数据质量检查
-3. 建立数据质量Dashboard
+1. 在`filter_stocks.py`中添加数据质量检查
+2. 建立数据质量Dashboard
