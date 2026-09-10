@@ -8,12 +8,15 @@ from market_data import HistoricalBar
 
 
 class ResearchError(ValueError):
+    """量化研究参数或历史数据不满足要求时抛出的业务异常。"""
+
     pass
 
 
 def _aligned_closes(
     bars_by_symbol: Mapping[str, Sequence[HistoricalBar]],
 ) -> tuple[list, dict[str, list[float]]]:
+    """整理各标的收盘价，并只保留所有标的共同拥有的交易日。"""
     if not bars_by_symbol:
         raise ResearchError('组合标的不能为空')
     series = {
@@ -27,6 +30,7 @@ def _aligned_closes(
 
 
 def _portfolio_metrics(equity: list[float], daily_returns: list[float], turnover: list[float]) -> dict:
+    """根据净值、日收益率和换手率计算组合回测摘要指标。"""
     if not equity:
         return {'annual_return': 0.0, 'annual_volatility': 0.0, 'sharpe_ratio': 0.0,
                 'sortino_ratio': 0.0, 'max_drawdown': 0.0, 'calmar_ratio': 0.0,
@@ -61,7 +65,12 @@ def run_portfolio_baseline(
     lookback: int | None = None,
     transaction_cost_bps: float = 2.0,
 ) -> dict:
-    """Run paper's rule-based portfolio benchmarks without look-ahead bias."""
+    """运行规则型组合基准策略，并避免使用未来数据。
+
+    ``equal_weight`` 使用等权重，``risk_parity`` 按历史波动率倒数分配，
+    ``tsmom`` 根据过去一段时间的动量决定多空方向。每个交易日先用前一日
+    收盘价得到信号，再将当日收益和调仓成本计入净值。
+    """
     if initial_cash <= 0:
         raise ResearchError('初始资金必须大于0')
     if transaction_cost_bps < 0:
@@ -85,6 +94,7 @@ def run_portfolio_baseline(
     cost_rate = transaction_cost_bps / 10000
 
     for index in range(1, len(dates)):
+        # 当前收益使用上一交易日已经持有的权重，调仓只影响下一段持有期。
         returns = {
             symbol: closes[symbol][index] / closes[symbol][index - 1] - 1
             for symbol in symbols
@@ -108,6 +118,7 @@ def run_portfolio_baseline(
                     for symbol in symbols
                 }
             else:
+                # 动量信号只比较 index-1 与更早的价格，避免未来函数。
                 signals = {
                     symbol: 1 if closes[symbol][index - 1] > closes[symbol][index - lookback - 1] else -1
                     for symbol in symbols
@@ -151,6 +162,11 @@ def run_sma_cross(
     commission_rate: float = 0.0003,
     slippage_bps: float = 2,
 ) -> dict:
+    """执行单标的短长均线交叉策略并返回交易记录与净值曲线。
+
+    金叉买入、死叉卖出；成交价分别加入滑点，成交金额再扣除佣金。
+    均线未形成前只保留现金，最终未平仓头寸按最后一根K线收盘价估值。
+    """
     if short_window < 2 or long_window <= short_window:
         raise ResearchError('均线参数必须满足 2 <= short_window < long_window')
     if len(bars) <= long_window:
@@ -174,6 +190,7 @@ def run_sma_cross(
         short_ma = sum(closes[-short_window:]) / short_window
         long_ma = sum(closes[-long_window:]) / long_window
         signal = short_ma > long_ma
+        # 只在信号发生变化时交易，避免连续多个交易日重复下单。
         if signal and not previous_signal and shares == 0:
             execution_price = bar.close * (1 + slip)
             shares = int(cash / (execution_price * (1 + commission_rate)))

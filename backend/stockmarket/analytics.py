@@ -41,6 +41,11 @@ def _fifo_realized_pnl(orders: list[SimulationOrder]) -> dict[int, Decimal]:
 
 
 def build_account_analytics(account: SimulationAccount) -> dict:
+    """汇总账户资产、持仓和成交表现。
+
+    已成交订单按时间和订单编号排序，并使用 FIFO 计算已实现盈亏；
+    当前持仓则通过行情提供方估值，行情不可用时回退到持仓均价。
+    """
     filled = list(
         SimulationOrder.objects.filter(account=account, status='FILLED').order_by('created_at', 'id')
     )

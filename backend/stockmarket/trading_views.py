@@ -129,6 +129,7 @@ def orders(request):
 
 
 def account_summary(request, account_id: int):
+    """返回账户现金、实时持仓市值和总资产；单个行情失败时使用持仓均价。"""
     try:
         account = SimulationAccount.objects.get(pk=account_id)
     except SimulationAccount.DoesNotExist:
@@ -163,6 +164,7 @@ def account_summary(request, account_id: int):
 
 
 def account_analytics(request, account_id: int):
+    """返回账户的 FIFO 已实现盈亏、未实现盈亏及交易统计。"""
     try:
         account = SimulationAccount.objects.get(pk=account_id)
     except SimulationAccount.DoesNotExist:
@@ -172,6 +174,7 @@ def account_analytics(request, account_id: int):
 
 @csrf_exempt
 def research_backtest(request):
+    """执行单标的均线交叉回测，并保存本次研究运行摘要。"""
     if request.method != 'POST':
         return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
     try:
@@ -221,6 +224,7 @@ def research_backtest(request):
 
 @csrf_exempt
 def portfolio_backtest(request):
+    """加载多个标的历史数据并执行组合基准回测。"""
     if request.method != 'POST':
         return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
     try:

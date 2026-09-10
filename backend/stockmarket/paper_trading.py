@@ -8,14 +8,18 @@ from .models import SimulationAccount, SimulationOrder, SimulationPosition
 
 
 class TradingError(ValueError):
+    """模拟交易请求不符合账户或市场规则时抛出的业务异常。"""
+
     pass
 
 
 def _money(value: Decimal) -> Decimal:
+    """将金额统一保留四位小数，避免交易过程产生过多小数位。"""
     return value.quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
 
 
 def create_account(name: str, market: str, initial_cash: Decimal) -> SimulationAccount:
+    """创建模拟账户，并根据市场类型设置结算币种和初始现金。"""
     normalized_market = Market(market.upper())
     if initial_cash <= 0:
         raise TradingError('初始资金必须大于0')
@@ -41,6 +45,11 @@ def submit_order(
     order_type: str = 'MARKET',
     requested_price: Decimal | None = None,
 ) -> SimulationOrder:
+    """校验并立即撮合一笔模拟订单。
+
+    账户使用行锁避免并发下单造成现金或持仓超卖；成交价包含滑点，
+    A 股卖出另外收取印花税，失败的行情、资金和持仓校验会保留拒单记录。
+    """
     account = SimulationAccount.objects.select_for_update().get(pk=account_id)
     side = side.upper()
     order_type = order_type.upper()
@@ -78,6 +87,7 @@ def submit_order(
             raise TradingError('限价单必须提供有效价格')
         can_fill = requested_price >= market_price if side == 'BUY' else requested_price <= market_price
         if not can_fill:
+            # 限价未触发时保留订单，但不改变现金和持仓。
             order.message = f'当前价 {market_price} 未触及限价'
             order.save(update_fields=['message'])
             return order
@@ -102,6 +112,7 @@ def submit_order(
         old_cost = position.average_price * old_quantity if position else Decimal('0')
         if position is None:
             position = SimulationPosition(account=account, symbol=symbol, quantity=0, average_price=0)
+        # 新均价只合并成交金额，不把历史佣金重复计入持仓成本。
         position.quantity += quantity
         position.average_price = _money((old_cost + gross) / position.quantity)
         account.cash -= total_cost
