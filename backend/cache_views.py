@@ -14,11 +14,11 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 def get_cache_dir():
-    """获取缓存目录路径"""
+    """返回与当前模块同级的后端 JSON 缓存目录。"""
     return os.path.join(os.path.dirname(__file__), 'cache')
 
 def find_latest_cache_file(pattern_list):
-    """根据优先级查找最新的缓存文件"""
+    """按模式优先级查找文件，并在同一模式下返回修改时间最新者。"""
     cache_dir = get_cache_dir()
     
     for pattern in pattern_list:
@@ -33,10 +33,7 @@ def find_latest_cache_file(pattern_list):
 @csrf_exempt
 @require_http_methods(["GET"])
 def get_backtest_details_cache(request):
-    """
-    从缓存读取回测详情数据
-    用于 http://localhost:3000/backtest-details 页面
-    """
+    """读取优先级最高的回测 JSON，并转换为回测详情页面所需结构。"""
     try:
         print("📊 收到回测详情缓存请求")
         
@@ -108,9 +105,7 @@ def get_backtest_details_cache(request):
 @csrf_exempt
 @require_http_methods(["GET"])
 def get_cache_status(request):
-    """
-    获取缓存状态信息
-    """
+    """列出缓存目录中的 JSON 文件、大小和最后修改时间。"""
     try:
         cache_dir = get_cache_dir()
         

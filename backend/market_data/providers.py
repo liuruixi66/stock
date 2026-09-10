@@ -19,6 +19,8 @@ class Market(StrEnum):
 
 
 class MarketDataError(RuntimeError):
+    """行情源不可用、返回数据无效或标的不存在时的统一异常。"""
+
     pass
 
 
@@ -39,15 +41,18 @@ class Quote:
 
     @property
     def change(self) -> float:
+        """返回当前价相对昨收的绝对变动。"""
         return self.price - self.previous_close
 
     @property
     def change_percent(self) -> float:
+        """返回相对昨收的百分比变动，昨收为零时返回 0。"""
         if not self.previous_close:
             return 0.0
         return self.change / self.previous_close * 100
 
     def to_dict(self) -> dict[str, Any]:
+        """生成可直接返回给 API/前端的 JSON 友好行情字典。"""
         data = asdict(self)
         data['market'] = self.market.value
         data['timestamp'] = self.timestamp.isoformat()
@@ -66,12 +71,15 @@ class HistoricalBar:
     volume: int
 
     def to_dict(self) -> dict[str, Any]:
+        """将日期转换为 ISO 字符串，生成 API 友好的 K 线字典。"""
         data = asdict(self)
         data['date'] = self.date.isoformat()
         return data
 
 
 class MarketDataProvider(ABC):
+    """所有市场行情实现必须遵循的统一查询接口。"""
+
     market: Market
 
     @abstractmethod
@@ -79,6 +87,7 @@ class MarketDataProvider(ABC):
         raise NotImplementedError
 
     def get_quotes(self, symbols: list[str]) -> list[Quote]:
+        """按输入顺序逐个获取行情；单个失败会中断本批请求。"""
         return [self.get_quote(symbol) for symbol in symbols]
 
     @abstractmethod
@@ -95,6 +104,7 @@ class AShareProvider(MarketDataProvider):
         self._spot_source = 'akshare/eastmoney'
 
     def _get_spot_frame(self):
+        """读取并短暂缓存 A 股实时快照，主数据源失败时切换备用源。"""
         if self._spot_frame is None or monotonic() - self._spot_loaded_at > 10:
             ak = import_module('akshare')
 
@@ -108,6 +118,7 @@ class AShareProvider(MarketDataProvider):
         return self._spot_frame
 
     def get_quote(self, symbol: str) -> Quote:
+        """获取 A 股实时行情，并统一为六位代码和人民币计价。"""
         normalized = symbol.strip().upper().split('.')[0]
         try:
             spot = self._get_spot_frame()
@@ -138,6 +149,7 @@ class AShareProvider(MarketDataProvider):
             raise MarketDataError(f'A股行情获取失败: {exc}') from exc
 
     def get_history(self, symbol: str, start: date, end: date) -> list[HistoricalBar]:
+        """获取 A 股前复权日线历史数据。"""
         normalized = symbol.strip().upper().split('.')[0]
         try:
             ak = import_module('akshare')
@@ -171,6 +183,7 @@ class YahooFinanceProvider(MarketDataProvider):
         self.session = session or requests.Session()
 
     def get_quote(self, symbol: str) -> Quote:
+        """从 Yahoo Finance 的 chart 接口获取美股实时行情。"""
         normalized = symbol.strip().upper()
         try:
             response = self.session.get(
@@ -206,6 +219,7 @@ class YahooFinanceProvider(MarketDataProvider):
             raise MarketDataError(f'美股行情获取失败: {exc}') from exc
 
     def get_history(self, symbol: str, start: date, end: date) -> list[HistoricalBar]:
+        """获取指定日期范围内的美股日线历史数据。"""
         normalized = symbol.strip().upper()
         try:
             response = self.session.get(
@@ -251,9 +265,11 @@ class BinanceProvider(MarketDataProvider):
 
     @staticmethod
     def _normalize_symbol(symbol: str) -> str:
+        """移除分隔符并统一为 Binance 使用的大写交易对格式。"""
         return symbol.strip().upper().replace('-', '').replace('/', '')
 
     def get_quote(self, symbol: str) -> Quote:
+        """获取 Binance 现货 24 小时行情，不需要 API 密钥。"""
         normalized = self._normalize_symbol(symbol)
         try:
             response = self.session.get(
@@ -284,6 +300,7 @@ class BinanceProvider(MarketDataProvider):
             raise MarketDataError(f'加密货币行情获取失败: {exc}') from exc
 
     def get_history(self, symbol: str, start: date, end: date) -> list[HistoricalBar]:
+        """获取 Binance 日线 K 线，并转换为统一的历史柱格式。"""
         normalized = self._normalize_symbol(symbol)
         try:
             response = self.session.get(
@@ -313,6 +330,7 @@ class BinanceProvider(MarketDataProvider):
 
 @lru_cache(maxsize=3)
 def get_provider(market: Market | str) -> MarketDataProvider:
+    """按市场返回可复用的行情 provider 实例，最多缓存三个市场。"""
     try:
         normalized = Market(str(market).upper())
     except ValueError as exc:
