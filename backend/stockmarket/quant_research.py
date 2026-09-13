@@ -58,25 +58,48 @@ def _portfolio_metrics(equity: list[float], daily_returns: list[float], turnover
     }
 
 
+def _entropy_regularized_weights(
+    weights: dict[str, float], strength: float,
+) -> dict[str, float]:
+    """将基础权重向等权收缩，降低集中度和样本外漂移。"""
+    if not 0 <= strength <= 1:
+        raise ResearchError('entropy_strength 必须在 0 到 1 之间')
+    if not weights:
+        return {}
+    equal_weight = 1 / len(weights)
+    return {
+        symbol: (1 - strength) * weight + strength * equal_weight
+        for symbol, weight in weights.items()
+    }
+
+
 def run_portfolio_baseline(
     bars_by_symbol: Mapping[str, Sequence[HistoricalBar]],
     initial_cash: float,
     strategy: str = 'equal_weight',
     lookback: int | None = None,
     transaction_cost_bps: float = 2.0,
+    entropy_strength: float = 0.0,
+    impact_bps: float = 0.0,
+    impact_exponent: float = 1.0,
 ) -> dict:
     """运行规则型组合基准策略，并避免使用未来数据。
 
     ``equal_weight`` 使用等权重，``risk_parity`` 按历史波动率倒数分配，
-    ``tsmom`` 根据过去一段时间的动量决定多空方向。每个交易日先用前一日
-    收盘价得到信号，再将当日收益和调仓成本计入净值。
+    ``tsmom`` 根据过去一段时间的动量决定多空方向，``entropy_risk_parity``
+    在风险平价权重上施加等权收缩。每个交易日先用前一日收盘价得到信号，
+    再将当日收益、交易成本和换手率代理的冲击成本计入净值。
     """
     if initial_cash <= 0:
         raise ResearchError('初始资金必须大于0')
     if transaction_cost_bps < 0:
         raise ResearchError('交易成本不能小于0')
-    if strategy not in {'equal_weight', 'risk_parity', 'tsmom'}:
-        raise ResearchError('策略必须是 equal_weight、risk_parity 或 tsmom')
+    if impact_bps < 0:
+        raise ResearchError('冲击成本不能小于0')
+    if impact_exponent <= 0:
+        raise ResearchError('impact_exponent 必须大于0')
+    if strategy not in {'equal_weight', 'risk_parity', 'tsmom', 'entropy_risk_parity'}:
+        raise ResearchError('策略必须是 equal_weight、risk_parity、entropy_risk_parity 或 tsmom')
     default_lookback = 60 if strategy == 'risk_parity' else 252 if strategy == 'tsmom' else 1
     lookback = lookback or default_lookback
     if lookback < 1:
@@ -103,7 +126,7 @@ def run_portfolio_baseline(
             previous_weights = weights.copy()
             if strategy == 'equal_weight':
                 weights = {symbol: 1 / len(symbols) for symbol in symbols}
-            elif strategy == 'risk_parity':
+            elif strategy in {'risk_parity', 'entropy_risk_parity'}:
                 volatilities = {}
                 for symbol in symbols:
                     trailing = [
@@ -117,6 +140,8 @@ def run_portfolio_baseline(
                     symbol: inverse.get(symbol, 0.0) / total_inverse if total_inverse else 0.0
                     for symbol in symbols
                 }
+                if strategy == 'entropy_risk_parity':
+                    weights = _entropy_regularized_weights(weights, entropy_strength)
             else:
                 # 动量信号只比较 index-1 与更早的价格，避免未来函数。
                 signals = {
@@ -131,7 +156,13 @@ def run_portfolio_baseline(
         else:
             current_turnover = 0.0
             turnover.append(current_turnover)
-        net_return = sum(weights[symbol] * returns[symbol] for symbol in symbols) - current_turnover * cost_rate
+        impact_rate = impact_bps / 10000
+        impact_cost = impact_rate * current_turnover ** impact_exponent
+        net_return = (
+            sum(weights[symbol] * returns[symbol] for symbol in symbols)
+            - current_turnover * cost_rate
+            - impact_cost
+        )
         daily_returns.append(net_return)
         equity.append(equity[-1] * (1 + net_return))
 
@@ -140,6 +171,9 @@ def run_portfolio_baseline(
         'parameters': {
             'lookback': lookback,
             'transaction_cost_bps': transaction_cost_bps,
+            'entropy_strength': entropy_strength,
+            'impact_bps': impact_bps,
+            'impact_exponent': impact_exponent,
             'symbols': symbols,
         },
         'initial_cash': round(initial_cash, 2),

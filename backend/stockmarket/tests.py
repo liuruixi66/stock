@@ -205,3 +205,43 @@ class QuantResearchTests(TestCase):
             self.assertEqual(len(result['equity_curve']), len(prices_a))
             self.assertIn('sharpe_ratio', result['metrics'])
             self.assertTrue(result['weight_history'])
+
+    def test_entropy_risk_parity_reduces_weight_concentration(self) -> None:
+        start = date(2025, 1, 1)
+        bars_by_symbol = {
+            'AAA': [HistoricalBar(start + timedelta(days=index), 100 + index, 100 + index,
+                                  100 + index, 100 + index, 1000) for index in range(8)],
+            'BBB': [HistoricalBar(start + timedelta(days=index), 100, 100, 100, 100, 1000)
+                    for index in range(8)],
+        }
+        result = run_portfolio_baseline(
+            bars_by_symbol,
+            initial_cash=100000,
+            strategy='entropy_risk_parity',
+            lookback=2,
+            entropy_strength=0.5,
+        )
+
+        weights = result['weight_history'][-1]['weights']
+        self.assertAlmostEqual(sum(weights.values()), 1.0)
+        self.assertLess(max(weights.values()), 1.0)
+        self.assertEqual(result['parameters']['entropy_strength'], 0.5)
+
+    def test_impact_cost_reduces_portfolio_equity(self) -> None:
+        start = date(2025, 1, 1)
+        bars_by_symbol = {
+            symbol: [HistoricalBar(start + timedelta(days=index), price, price, price, price, 1000)
+                     for index, price in enumerate(prices)]
+            for symbol, prices in {
+                'AAA': [100, 101, 99, 102, 98, 103, 97, 104],
+                'BBB': [100, 99, 101, 98, 102, 97, 103, 96],
+            }.items()
+        }
+        without_impact = run_portfolio_baseline(
+            bars_by_symbol, 100000, strategy='tsmom', lookback=2,
+        )
+        with_impact = run_portfolio_baseline(
+            bars_by_symbol, 100000, strategy='tsmom', lookback=2, impact_bps=50,
+        )
+
+        self.assertLess(with_impact['final_equity'], without_impact['final_equity'])

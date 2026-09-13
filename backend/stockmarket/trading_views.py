@@ -251,6 +251,9 @@ def portfolio_backtest(request):
             strategy=str(data.get('strategy', 'equal_weight')).lower(),
             lookback=int(data['lookback']) if data.get('lookback') is not None else None,
             transaction_cost_bps=float(data.get('transaction_cost_bps', 2)),
+            entropy_strength=float(data.get('entropy_strength', 0)),
+            impact_bps=float(data.get('impact_bps', 0)),
+            impact_exponent=float(data.get('impact_exponent', 1)),
         )
         result.update({
             'market': market,
