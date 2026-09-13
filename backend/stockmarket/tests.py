@@ -1,11 +1,11 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import patch
 
 from django.test import TestCase
 from django.urls import reverse
 
-from market_data import HistoricalBar, Market, Quote
+from market_data import HistoricalBar, Market, MinuteBar, Quote
 from .analytics import build_account_analytics
 from .models import SimulationAccount, SimulationOrder, SimulationPosition
 from .paper_trading import TradingError, submit_order
@@ -95,6 +95,35 @@ class MarketHistoryApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['data']['bars'][0]['close'], 10.5)
+
+    @patch('stockmarket.trading_views.get_provider')
+    def test_minute_endpoint_returns_read_only_closed_bars(self, get_provider_mock) -> None:
+        class MinuteProvider:
+            def get_minute_bars(self, symbol, limit):
+                self.symbol = symbol
+                self.limit = limit
+                return [MinuteBar(
+                    timestamp=datetime(2025, 1, 2, 12, 1, tzinfo=timezone.utc),
+                    open=10,
+                    high=11,
+                    low=9,
+                    close=10.5,
+                    volume=1000,
+                )]
+
+        provider = MinuteProvider()
+        get_provider_mock.return_value = provider
+        response = self.client.get(reverse('market_minute_data'), {
+            'market': 'CRYPTO',
+            'symbol': 'BTC/USDT',
+            'limit': '10',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(provider.symbol, 'BTC/USDT')
+        self.assertEqual(provider.limit, 10)
+        self.assertEqual(response.json()['data']['interval'], '1m')
+        self.assertEqual(response.json()['data']['bars'][0]['timestamp'], '2025-01-02T12:01:00+00:00')
 
     @patch('stockmarket.trading_views.get_provider')
     def test_portfolio_backtest_endpoint_runs_remote_baseline(self, get_provider_mock) -> None:

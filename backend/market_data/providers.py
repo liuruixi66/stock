@@ -77,6 +77,22 @@ class HistoricalBar:
         return data
 
 
+@dataclass(frozen=True)
+class MinuteBar:
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+    def to_dict(self) -> dict[str, Any]:
+        """生成带分钟时间戳的 API 行情字典。"""
+        data = asdict(self)
+        data['timestamp'] = self.timestamp.isoformat()
+        return data
+
+
 class MarketDataProvider(ABC):
     """所有市场行情实现必须遵循的统一查询接口。"""
 
@@ -93,6 +109,9 @@ class MarketDataProvider(ABC):
     @abstractmethod
     def get_history(self, symbol: str, start: date, end: date) -> list[HistoricalBar]:
         raise NotImplementedError
+
+    def get_minute_bars(self, symbol: str, limit: int = 500) -> list[MinuteBar]:
+        raise MarketDataError(f'{self.market.value} 行情源不支持分钟级数据')
 
 
 class AShareProvider(MarketDataProvider):
@@ -326,6 +345,39 @@ class BinanceProvider(MarketDataProvider):
             ) for item in response.json()]
         except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
             raise MarketDataError(f'加密货币历史行情获取失败: {exc}') from exc
+
+    def get_minute_bars(self, symbol: str, limit: int = 500) -> list[MinuteBar]:
+        """获取已收盘的 Binance 1 分钟 K 线，不包含当前未完成 K 线。"""
+        normalized = self._normalize_symbol(symbol)
+        if not 1 <= limit <= 1000:
+            raise MarketDataError('分钟数据条数必须在1至1000之间')
+        try:
+            response = self.session.get(
+                self.klines_endpoint,
+                params={'symbol': normalized, 'interval': '1m', 'limit': limit},
+                headers={'User-Agent': 'stock-research-platform/1.0'},
+                timeout=8,
+            )
+            response.raise_for_status()
+            now = datetime.now(timezone.utc)
+            bars = []
+            for item in response.json():
+                close_time = datetime.fromtimestamp(int(item[6]) / 1000, timezone.utc)
+                if close_time > now:
+                    continue
+                bars.append(MinuteBar(
+                    timestamp=close_time,
+                    open=float(item[1]),
+                    high=float(item[2]),
+                    low=float(item[3]),
+                    close=float(item[4]),
+                    volume=float(item[5]),
+                ))
+            return bars
+        except MarketDataError:
+            raise
+        except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
+            raise MarketDataError(f'加密货币分钟行情获取失败: {exc}') from exc
 
 
 @lru_cache(maxsize=3)

@@ -5,6 +5,7 @@ import cache_views
 urlpatterns = [
     path('api/market/quotes/', trading_views.market_quotes, name='market_quotes'),
     path('api/market/history/', trading_views.market_history, name='market_history'),
+    path('api/market/minute/', trading_views.market_minute_data, name='market_minute_data'),
     path('api/paper/accounts/', trading_views.accounts, name='paper_accounts'),
     path('api/paper/orders/', trading_views.orders, name='paper_orders'),
     path('api/paper/accounts/<int:account_id>/summary/', trading_views.account_summary, name='paper_account_summary'),

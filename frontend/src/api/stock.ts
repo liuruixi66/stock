@@ -27,6 +27,8 @@ export const researchApi = {
             params: { market, symbol, start_date, end_date },
             timeout: 120000,
         }),
+    getMinuteBars: (symbol: string, limit = 500) =>
+        api.get('/market/minute/', { params: { market: 'CRYPTO', symbol, limit } }),
     runBacktest: (data: any) => api.post('/research/backtest/', data, { timeout: 120000 }),
     runPortfolioBacktest: (data: any) => api.post('/research/portfolio-backtest/', data, { timeout: 120000 }),
     getRuns: (market?: Market) => api.get('/research/runs/', { params: { market } }),

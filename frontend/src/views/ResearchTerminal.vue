@@ -20,6 +20,11 @@
       <button class="command" :disabled="loadingQuotes" @click="loadQuotes">
         <i class="fa fa-refresh"></i>{{ loadingQuotes ? '更新中' : '更新行情' }}
       </button>
+      <div v-if="market === 'CRYPTO'" class="crypto-presets" aria-label="虚拟货币">
+        <button v-for="symbol in cryptoSymbols" :key="symbol" class="watch-chip" @click="selectCrypto(symbol)">
+          {{ symbol.replace('USDT', '') }}
+        </button>
+      </div>
       <div v-for="quote in quotes" :key="quote.symbol" class="quote">
         <strong>{{ quote.symbol }}</strong>
         <span>{{ quote.price.toFixed(2) }} {{ quote.currency }}</span>
@@ -163,6 +168,7 @@ interface PaperAccount { id: number; name: string; market: Market; currency: str
 interface WatchItem { id: number; market: Market; symbol: string; name: string }
 const market = ref<Market>('A')
 const symbols = ref('000001,600519')
+const cryptoSymbols = ['BNBUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'ZECUSDT']
 const quotes = ref<any[]>([])
 const accounts = ref<PaperAccount[]>([])
 const selectedAccountId = ref<number>()
@@ -197,7 +203,7 @@ function formatJson(value: unknown) {
 }
 function switchMarket(value: Market) {
   market.value = value
-  symbols.value = value === 'A' ? '000001,600519' : value === 'US' ? 'AAPL,MSFT' : 'BTCUSDT,ETHUSDT'
+  symbols.value = value === 'A' ? '000001,600519' : value === 'US' ? 'AAPL,MSFT' : cryptoSymbols.join(',')
   research.symbol = value === 'A' ? '000001' : value === 'US' ? 'AAPL' : 'BTCUSDT'
   order.symbol = research.symbol
   order.quantity = value === 'A' ? 100 : value === 'US' ? 10 : 0.01
@@ -206,6 +212,12 @@ function switchMarket(value: Market) {
   syncMarketWatchlist()
   loadQuotes()
   loadRuns()
+}
+function selectCrypto(symbol: string) {
+  symbols.value = symbol
+  research.symbol = symbol
+  order.symbol = symbol
+  loadQuotes()
 }
 const accountCurrency = computed(() => market.value === 'A' ? 'CNY' : market.value === 'US' ? 'USD' : 'USDT')
 async function loadWatchlist() {
