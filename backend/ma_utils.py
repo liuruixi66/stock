@@ -10,6 +10,8 @@ def calculate_ma(series, window=5):
     
     Returns:
         pandas Series: 移动平均线序列
+
+    使用滚动窗口的默认缺失值策略，窗口未满时仍会返回已有数据的均值。
     """
     return series.rolling(window=window, min_periods=1).mean()
 
@@ -20,7 +22,7 @@ def get_ma_on_date(df, target_date, window=5, price_col='close'):
     target_date: 目标日期字符串，如'2025-07-31'
     window: 均线周期
     price_col: 价格字段名，默认'close'
-    返回: MA值
+    返回: MA值。日期不要求连续，只按排序后的有效交易日计数。
     """
     df = df.sort_values('date')
     df = df[df['date'] <= target_date]
@@ -35,7 +37,8 @@ def add_ma_column(df, window=5, price_col='close', ma_col=None):
     window: 均线周期
     price_col: 价格字段名，默认'close'
     ma_col: MA列名，默认'MA{window}'
-    返回: 新DataFrame，含MA列
+    返回: 按日期排序并新增MA列的DataFrame；排序和赋值可能影响传入对象，
+    调用方若需保留原顺序应先传入副本。
     """
     if ma_col is None:
         ma_col = f'MA{window}'

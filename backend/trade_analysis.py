@@ -8,7 +8,11 @@ import pandas as pd
 from datetime import datetime
 
 def analyze_trades():
-    """详细分析交易数据"""
+    """读取固定的回测缓存并打印交易、现金流和等权重再平衡诊断。
+
+    这是面向开发排查的命令行脚本，不是生产 API；数据路径和输出格式
+    与当前本地缓存约定绑定，迁移环境时需要同步调整。
+    """
     
     # 加载数据
     with open('/home/liu/桌面/stock-20250730_update./backend/cache/earnings_overview_latest_equal_weight.json', 'r', encoding='utf-8') as f:

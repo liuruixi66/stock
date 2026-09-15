@@ -15,8 +15,10 @@ from django.views.decorators.http import require_http_methods
 @csrf_exempt
 @require_http_methods(["GET"])
 def get_available_date_ranges(request):
-    """
-    获取cache目录中所有JSON文件的日期范围
+    """扫描回测缓存文件名并返回可用日期范围及最新推荐项。
+
+    日期来自 ``earnings_overview_YYYYMMDD_YYYYMMDD*.json`` 文件名，文件内容
+    只用于补充策略名和交易数；单个文件解析失败不会阻断其他文件返回。
     """
     try:
         print("📅 开始获取可用日期范围...")

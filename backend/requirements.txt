@@ -18,6 +18,7 @@ backtrader>=1.9.76.123
 # 数据获取
 tushare>=1.2.89  # 可选，用于获取股票数据
 akshare>=1.10.0  # 可选，替代数据源
+requests>=2.31.0
 
 # API文档
 drf-yasg>=1.21.0  # 可选，用于API文档生成

@@ -16,18 +16,23 @@ def compare_close(df, value):
     return df['CLOSE'] > value
 # 常用比较运算符函数
 def greater(a, b):
+    """返回 ``a`` 是否大于 ``b``。"""
     return a > b
 
 def less(a, b):
+    """返回 ``a`` 是否小于 ``b``。"""
     return a < b
 
 def greater_equal(a, b):
+    """返回 ``a`` 是否大于或等于 ``b``。"""
     return a >= b
 
 def less_equal(a, b):
+    """返回 ``a`` 是否小于或等于 ``b``。"""
     return a <= b
 
 def equal(a, b):
+    """返回 ``a`` 是否等于 ``b``。"""
     return a == b
 """
 compare.py

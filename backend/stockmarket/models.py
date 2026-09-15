@@ -480,3 +480,96 @@ class StockHistoryData(models.Model):
 
     def __str__(self):
         return f"{self.symbol} - {self.date}"
+
+
+class SimulationAccount(models.Model):
+    MARKET_CHOICES = [('A', 'A股'), ('US', '美股'), ('CRYPTO', '虚拟货币')]
+
+    name = models.CharField('账户名称', max_length=80, unique=True)
+    market = models.CharField('市场', max_length=6, choices=MARKET_CHOICES)
+    currency = models.CharField('币种', max_length=3)
+    initial_cash = models.DecimalField('初始资金', max_digits=20, decimal_places=4)
+    cash = models.DecimalField('可用资金', max_digits=20, decimal_places=4)
+    commission_rate = models.DecimalField('佣金率', max_digits=10, decimal_places=6, default=0.0003)
+    slippage_bps = models.DecimalField('滑点基点', max_digits=8, decimal_places=2, default=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'simulation_account'
+
+
+class SimulationPosition(models.Model):
+    account = models.ForeignKey(SimulationAccount, on_delete=models.CASCADE, related_name='positions')
+    symbol = models.CharField('股票代码', max_length=20)
+    quantity = models.DecimalField('持仓数量', max_digits=24, decimal_places=8)
+    average_price = models.DecimalField('平均成本', max_digits=20, decimal_places=4)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'simulation_position'
+        constraints = [
+            models.UniqueConstraint(fields=['account', 'symbol'], name='unique_simulation_position')
+        ]
+
+
+class SimulationOrder(models.Model):
+    SIDE_CHOICES = [('BUY', '买入'), ('SELL', '卖出')]
+    TYPE_CHOICES = [('MARKET', '市价'), ('LIMIT', '限价')]
+    STATUS_CHOICES = [('PENDING', '待成交'), ('FILLED', '已成交'), ('REJECTED', '已拒绝')]
+
+    account = models.ForeignKey(SimulationAccount, on_delete=models.CASCADE, related_name='orders')
+    symbol = models.CharField('股票代码', max_length=20)
+    side = models.CharField('方向', max_length=4, choices=SIDE_CHOICES)
+    order_type = models.CharField('订单类型', max_length=6, choices=TYPE_CHOICES)
+    quantity = models.DecimalField('数量', max_digits=24, decimal_places=8)
+    requested_price = models.DecimalField('委托价格', max_digits=20, decimal_places=4, null=True, blank=True)
+    executed_price = models.DecimalField('成交价格', max_digits=20, decimal_places=4, null=True, blank=True)
+    commission = models.DecimalField('佣金', max_digits=20, decimal_places=4, default=0)
+    tax = models.DecimalField('税费', max_digits=20, decimal_places=4, default=0)
+    status = models.CharField('状态', max_length=8, choices=STATUS_CHOICES, default='PENDING')
+    message = models.CharField('说明', max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    executed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'simulation_order'
+        ordering = ['-created_at']
+
+
+class WatchlistItem(models.Model):
+    MARKET_CHOICES = [('A', 'A股'), ('US', '美股'), ('CRYPTO', '虚拟货币')]
+
+    market = models.CharField('市场', max_length=6, choices=MARKET_CHOICES)
+    symbol = models.CharField('股票代码', max_length=20)
+    name = models.CharField('名称', max_length=60, blank=True)
+    note = models.CharField('备注', max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'watchlist_item'
+        ordering = ['market', 'symbol']
+        constraints = [
+            models.UniqueConstraint(fields=['market', 'symbol'], name='unique_watchlist_symbol')
+        ]
+
+
+class ResearchRun(models.Model):
+    """每次量化研究回测的过程留痕"""
+
+    market = models.CharField('市场', max_length=6)
+    symbol = models.CharField('股票代码', max_length=20)
+    strategy = models.CharField('策略', max_length=40, default='sma_cross')
+    parameters = models.JSONField('参数', default=dict)
+    start_date = models.DateField('起始日期')
+    end_date = models.DateField('结束日期')
+    total_return = models.FloatField('总收益率')
+    max_drawdown = models.FloatField('最大回撤')
+    sharpe_ratio = models.FloatField('夏普比率')
+    trade_count = models.PositiveIntegerField('成交次数')
+    trades = models.JSONField('模拟成交明细', default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'research_run'
+        ordering = ['-created_at']

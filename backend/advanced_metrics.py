@@ -21,6 +21,9 @@ def calculate_advanced_metrics(trades_data: List[Dict], initial_cash: float, fin
     
     Returns:
         包含高级指标的字典
+
+    提供日收益率时使用真实收益率计算回撤和夏普；未提供时使用简化估算，
+    因而估算结果适合展示，不应与完整净值曲线的风险指标直接比较。
     """
     metrics = {}
     
@@ -67,8 +70,7 @@ def calculate_advanced_metrics(trades_data: List[Dict], initial_cash: float, fin
         else:
             metrics['win_rate'] = "0.00%"
         
-        # 3. 计算最大回撤
-        # 如果没有每日收益率数据，使用简化计算
+        # 3. 计算最大回撤；没有日收益率时退化为展示用估算值。
         if daily_returns and len(daily_returns) > 1:
             # 计算累计收益
             cumulative_returns = np.cumprod(1 + np.array(daily_returns))
@@ -88,7 +90,7 @@ def calculate_advanced_metrics(trades_data: List[Dict], initial_cash: float, fin
             else:
                 metrics['max_drawdown'] = f"{abs(total_return):.2%}"
         
-        # 4. 计算夏普比率
+        # 4. 计算夏普比率，日频数据统一按 252 个交易日年化。
         if daily_returns and len(daily_returns) > 1:
             # 计算年化收益率和波动率
             mean_return = np.mean(daily_returns)
@@ -148,6 +150,9 @@ def generate_mock_daily_returns(initial_cash: float, final_cash: float, days: in
     """
     生成模拟的每日收益率数据
     基于最终收益率生成合理的日收益率序列
+
+    固定随机种子是为了让演示、测试和前端图表每次得到相同序列；该数据
+    仅用于缺少真实净值曲线时的展示，不代表实际市场路径。
     """
     try:
         total_return = (final_cash - initial_cash) / initial_cash
