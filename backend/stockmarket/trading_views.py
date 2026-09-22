@@ -6,6 +6,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from market_data import MarketDataError, get_provider
+from market_data.local_history import LocalHistoryProvider, RESEARCH_START, available_end
 from .analytics import build_account_analytics
 from .models import ResearchRun, SimulationAccount, SimulationOrder, WatchlistItem
 from .paper_trading import TradingError, create_account, submit_order
@@ -202,9 +203,9 @@ def research_backtest(request):
         return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
     try:
         data = json.loads(request.body or '{}')
-        end = date.fromisoformat(data.get('end_date', date.today().isoformat()))
-        start = date.fromisoformat(data.get('start_date', (end - timedelta(days=730)).isoformat()))
-        provider = get_provider(data.get('market', 'A'))
+        end = date.fromisoformat(data.get('end_date', available_end().isoformat()))
+        start = date.fromisoformat(data.get('start_date', RESEARCH_START.isoformat()))
+        provider = LocalHistoryProvider(data.get('market', 'A'))
         bars = provider.get_history(data['symbol'], start, end)
         result = run_sma_cross(
             bars=bars,
@@ -218,6 +219,7 @@ def research_backtest(request):
             'symbol': data['symbol'].upper(),
             'market': data.get('market', 'A').upper(),
             'data_source': provider.__class__.__name__,
+            'datasets': provider.datasets,
             'historical_data': [bar.to_dict() for bar in bars],
         })
         run = ResearchRun.objects.create(
@@ -230,6 +232,7 @@ def research_backtest(request):
                 'initial_cash': float(data.get('initial_cash', 100000)),
                 'commission_rate': float(data.get('commission_rate', 0.0003)),
                 'slippage_bps': float(data.get('slippage_bps', 2)),
+                'datasets': provider.datasets,
             },
             start_date=start,
             end_date=end,
@@ -259,11 +262,11 @@ def portfolio_backtest(request):
         symbols = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
         if not symbols or len(symbols) > 20:
             return JsonResponse({'success': False, 'error': '请提供1至20个组合标的'}, status=400)
-        end = date.fromisoformat(data.get('end_date', date.today().isoformat()))
-        start = date.fromisoformat(data.get('start_date', (end - timedelta(days=730)).isoformat()))
+        end = date.fromisoformat(data.get('end_date', available_end().isoformat()))
+        start = date.fromisoformat(data.get('start_date', RESEARCH_START.isoformat()))
         if start > end:
             return JsonResponse({'success': False, 'error': '开始日期不能晚于结束日期'}, status=400)
-        provider = get_provider(market)
+        provider = LocalHistoryProvider(market)
         bars_by_symbol = {
             symbol: provider.get_history(symbol, start, end)
             for symbol in symbols
@@ -281,6 +284,7 @@ def portfolio_backtest(request):
         result.update({
             'market': market,
             'data_source': provider.__class__.__name__,
+            'datasets': provider.datasets,
             'data_counts': {symbol: len(bars) for symbol, bars in bars_by_symbol.items()},
             'start_date': start.isoformat(),
             'end_date': end.isoformat(),
@@ -301,8 +305,8 @@ def leaky_forecast_experiment(request):
         symbol = str(data.get('symbol', '')).strip().upper()
         if not symbol:
             return JsonResponse({'success': False, 'error': '请提供标的代码'}, status=400)
-        end = date.fromisoformat(data.get('end_date', date.today().isoformat()))
-        start = date.fromisoformat(data.get('start_date', (end - timedelta(days=730)).isoformat()))
+        end = date.fromisoformat(data.get('end_date', available_end().isoformat()))
+        start = date.fromisoformat(data.get('start_date', RESEARCH_START.isoformat()))
         if start > end:
             return JsonResponse({'success': False, 'error': '开始日期不能晚于结束日期'}, status=400)
         raw_gamma_values = data.get('gamma_values') or [1.0, 0.95, 0.9, 0.8]
@@ -310,7 +314,7 @@ def leaky_forecast_experiment(request):
             gamma_values = [float(item.strip()) for item in raw_gamma_values.split(',') if item.strip()]
         else:
             gamma_values = [float(item) for item in raw_gamma_values]
-        provider = get_provider(market)
+        provider = LocalHistoryProvider(market)
         bars = provider.get_history(symbol, start, end)
         result = run_leaky_integrator_experiment(
             bars=bars,
@@ -322,6 +326,7 @@ def leaky_forecast_experiment(request):
             'market': market,
             'symbol': symbol,
             'data_source': provider.__class__.__name__,
+            'datasets': provider.datasets,
             'data_count': len(bars),
             'start_date': start.isoformat(),
             'end_date': end.isoformat(),

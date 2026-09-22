@@ -1,15 +1,116 @@
+import json
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.core.management import call_command
+from django.core.management.base import CommandError
+from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
-from market_data import HistoricalBar, Market, MinuteBar, Quote
+from market_data import HistoricalBar, Market, MarketDataError, MinuteBar, Quote
+from market_data.local_history import LocalHistoryProvider, download_history
 from .analytics import build_account_analytics
 from .models import SimulationAccount, SimulationOrder, SimulationPosition
 from .paper_trading import TradingError, submit_order
 from .quant_research import reconstruct_differenced_forecast, run_leaky_integrator_experiment, run_portfolio_baseline, run_sma_cross
+
+
+class LocalHistoryTests(SimpleTestCase):
+    @patch('market_data.local_history.get_provider')
+    def test_corrupted_snapshot_is_rejected(self, remote) -> None:
+        remote.return_value.get_history.return_value = [
+            HistoricalBar(date(2024, 1, 2), 10, 11, 9, 10.5, 1000),
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            download_history('US', 'AAPL', date(2024, 1, 1), date(2024, 1, 3), root)
+            local = LocalHistoryProvider('US', root)
+            path = local.path('AAPL')
+            payload = json.loads(path.read_text())
+            payload['bars'][0]['close'] = 11
+            path.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(MarketDataError, 'integrity'):
+                local.get_history('AAPL', date(2024, 1, 1), date(2024, 1, 3))
+
+    @patch('market_data.local_history.get_provider')
+    def test_download_command_keeps_successes_and_reports_failures(self, remote) -> None:
+        def history(symbol, start, end):
+            if symbol == 'MSFT':
+                raise MarketDataError('Unavailable source')
+            return [HistoricalBar(date(2024, 1, 2), 10, 11, 9, 10.5, 1000)]
+
+        remote.return_value.get_history.side_effect = history
+        with TemporaryDirectory() as directory:
+            output = StringIO()
+            with self.assertRaises(CommandError):
+                call_command('download_history', '--market', 'US', '--symbols', 'AAPL', 'MSFT',
+                             '--start', '2024-01-01', '--end', '2024-01-03', '--output', directory,
+                             stdout=output, stderr=StringIO())
+            self.assertIn('Completed: 1; failed: 1', output.getvalue())
+            self.assertTrue((Path(directory) / 'US' / 'AAPL.json').exists())
+            self.assertFalse((Path(directory) / 'US' / 'MSFT.json').exists())
+
+    @patch('market_data.local_history.get_provider')
+    def test_incomplete_crypto_history_is_rejected(self, remote) -> None:
+        remote.return_value.get_history.return_value = [
+            HistoricalBar(date(2024, 1, 2), 10, 11, 9, 10.5, 1000),
+        ]
+        with TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(MarketDataError, 'Incomplete crypto'):
+                download_history('CRYPTO', 'BTCUSDT', date(2024, 1, 1), date(2024, 1, 3), Path(directory))
+            self.assertFalse(list(Path(directory).rglob('*.json')))
+
+    @patch('market_data.local_history.get_provider')
+    def test_download_then_read_offline_without_overwriting(self, remote) -> None:
+        start, end = date(2024, 1, 1), date(2024, 1, 3)
+        remote.return_value.get_history.return_value = [
+            HistoricalBar(date(2024, 1, 2), 10, 11, 9, 10.5, 1000),
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = download_history('US', 'aapl', start, end, root)
+            self.assertEqual(metadata['bar_count'], 1)
+            remote.reset_mock()
+            remote.side_effect = AssertionError('Network is forbidden')
+            local = LocalHistoryProvider('US', root)
+            self.assertEqual(local.get_history('AAPL', start, end)[0].close, 10.5)
+            self.assertTrue(download_history('US', 'AAPL', start, end, root)['cached'])
+            with self.assertRaises(MarketDataError):
+                local.get_history('MSFT', start, end)
+            with self.assertRaises(MarketDataError):
+                local.get_history('AAPL', start, end + timedelta(days=1))
+            remote.assert_not_called()
+
+    @patch('market_data.local_history.get_provider')
+    def test_crypto_download_chunks_more_than_1000_days(self, remote) -> None:
+        def history(symbol, start, end):
+            return [HistoricalBar(start + timedelta(days=index), 10, 11, 9, 10, 100)
+                    for index in range((end - start).days + 1)]
+
+        remote.return_value.get_history.side_effect = history
+        with TemporaryDirectory() as directory:
+            metadata = download_history('CRYPTO', 'BTC/USDT', date(2022, 1, 1), date(2024, 12, 31), Path(directory))
+            self.assertEqual(metadata['bar_count'], 1096)
+            self.assertEqual(remote.return_value.get_history.call_count, 2)
+
+    @patch('market_data.local_history.get_provider')
+    def test_invalid_data_and_future_dates_are_not_saved(self, remote) -> None:
+        remote.return_value.get_history.return_value = [
+            HistoricalBar(date(2024, 1, 2), 10, 9, 11, 10, 100),
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(MarketDataError):
+                download_history('US', 'AAPL', date(2024, 1, 1), date(2024, 1, 3), root)
+            self.assertFalse(list(root.rglob('*.json')))
+            remote.reset_mock()
+            with self.assertRaises(MarketDataError):
+                download_history('US', 'AAPL', date(2024, 1, 1), date(2099, 1, 1), root)
+            remote.assert_not_called()
 
 
 class FakeProvider:
@@ -125,9 +226,11 @@ class MarketHistoryApiTests(TestCase):
         self.assertEqual(response.json()['data']['interval'], '1m')
         self.assertEqual(response.json()['data']['bars'][0]['timestamp'], '2025-01-02T12:01:00+00:00')
 
-    @patch('stockmarket.trading_views.get_provider')
-    def test_portfolio_backtest_endpoint_runs_remote_baseline(self, get_provider_mock) -> None:
+    @patch('stockmarket.trading_views.LocalHistoryProvider')
+    def test_portfolio_backtest_endpoint_runs_local_baseline(self, get_provider_mock) -> None:
         class PortfolioProvider:
+            datasets = {}
+
             def get_history(self, symbol, start, end):
                 prices = [100, 101, 102, 103, 104, 105]
                 return [HistoricalBar(
@@ -155,9 +258,11 @@ class MarketHistoryApiTests(TestCase):
         self.assertEqual(response.json()['data']['strategy'], 'equal_weight')
         self.assertEqual(response.json()['data']['data_counts']['AAPL'], 6)
 
-    @patch('stockmarket.trading_views.get_provider')
+    @patch('stockmarket.trading_views.LocalHistoryProvider')
     def test_leaky_forecast_endpoint_returns_gamma_metrics(self, get_provider_mock) -> None:
         class ForecastProvider:
+            datasets = {}
+
             def get_history(self, symbol, start, end):
                 prices = [100, 101, 102, 103, 104, 105, 105, 105, 105, 105, 105]
                 return [HistoricalBar(
@@ -188,6 +293,36 @@ class MarketHistoryApiTests(TestCase):
         self.assertEqual(payload['symbol'], 'AAPL')
         self.assertEqual(payload['recommended_gamma'], 0.5)
         self.assertEqual(len(payload['metrics_by_gamma']), 2)
+
+
+    @patch('stockmarket.trading_views.get_provider', side_effect=AssertionError('Network is forbidden'))
+    @patch('market_data.local_history.get_provider', side_effect=AssertionError('Network is forbidden'))
+    def test_research_endpoints_use_real_local_snapshot(self, _download, _remote) -> None:
+        with TemporaryDirectory() as directory:
+            with patch('market_data.local_history.get_provider') as source:
+                source.return_value.get_history.return_value = [
+                    HistoricalBar(date(2024, 1, 1) + timedelta(days=index), 100 + index, 101 + index, 99 + index, 100 + index, 1000)
+                    for index in range(60)
+                ]
+                download_history('US', 'AAPL', date(2024, 1, 1), date(2024, 2, 29), Path(directory))
+            with self.settings(HISTORICAL_DATA_DIR=directory):
+                for endpoint in ('research_backtest', 'portfolio_backtest', 'leaky_forecast_experiment'):
+                    with self.subTest(endpoint=endpoint):
+                        response = self.client.post(reverse(endpoint), data={
+                            'market': 'US', 'symbol': 'AAPL', 'symbols': ['AAPL'],
+                            'start_date': '2024-01-01', 'end_date': '2024-02-29',
+                        }, content_type='application/json')
+                        self.assertEqual(response.status_code, 200, response.content)
+                        payload = response.json()['data']
+                        self.assertEqual(payload['data_source'], 'LocalHistoryProvider')
+                        self.assertEqual(payload['datasets']['AAPL']['bar_count'], 60)
+                        response = self.client.post(reverse(endpoint), data={
+                            'market': 'US', 'symbol': 'MISSING', 'symbols': ['MISSING'],
+                        }, content_type='application/json')
+                        self.assertEqual(response.status_code, 400)
+                        self.assertIn('network fallback is disabled', response.json()['error'])
+        _download.assert_not_called()
+        _remote.assert_not_called()
 
 
 class AnalyticsTests(TestCase):
