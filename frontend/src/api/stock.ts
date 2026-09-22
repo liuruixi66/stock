@@ -31,6 +31,7 @@ export const researchApi = {
         api.get('/market/minute/', { params: { market: 'CRYPTO', symbol, limit } }),
     runBacktest: (data: any) => api.post('/research/backtest/', data, { timeout: 120000 }),
     runPortfolioBacktest: (data: any) => api.post('/research/portfolio-backtest/', data, { timeout: 120000 }),
+    runLeakyForecastExperiment: (data: any) => api.post('/research/leaky-forecast/', data, { timeout: 120000 }),
     getRuns: (market?: Market) => api.get('/research/runs/', { params: { market } }),
     getRun: (runId: number) => api.get(`/research/runs/${runId}/`),
 }

@@ -9,7 +9,7 @@ from market_data import HistoricalBar, Market, MinuteBar, Quote
 from .analytics import build_account_analytics
 from .models import SimulationAccount, SimulationOrder, SimulationPosition
 from .paper_trading import TradingError, submit_order
-from .quant_research import run_portfolio_baseline, run_sma_cross
+from .quant_research import reconstruct_differenced_forecast, run_leaky_integrator_experiment, run_portfolio_baseline, run_sma_cross
 
 
 class FakeProvider:
@@ -155,6 +155,40 @@ class MarketHistoryApiTests(TestCase):
         self.assertEqual(response.json()['data']['strategy'], 'equal_weight')
         self.assertEqual(response.json()['data']['data_counts']['AAPL'], 6)
 
+    @patch('stockmarket.trading_views.get_provider')
+    def test_leaky_forecast_endpoint_returns_gamma_metrics(self, get_provider_mock) -> None:
+        class ForecastProvider:
+            def get_history(self, symbol, start, end):
+                prices = [100, 101, 102, 103, 104, 105, 105, 105, 105, 105, 105]
+                return [HistoricalBar(
+                    date=date(2025, 1, 1) + timedelta(days=index),
+                    open=price,
+                    high=price,
+                    low=price,
+                    close=price,
+                    volume=1000,
+                ) for index, price in enumerate(prices)]
+
+        get_provider_mock.return_value = ForecastProvider()
+        response = self.client.post(
+            reverse('leaky_forecast_experiment'),
+            data={
+                'market': 'US',
+                'symbol': 'AAPL',
+                'train_window': 5,
+                'horizon': 5,
+                'gamma_values': [1.0, 0.5],
+            },
+            content_type='application/json',
+        )
+
+        payload = response.json()['data']
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload['experiment'], 'leaky_integrator_differenced_forecast')
+        self.assertEqual(payload['symbol'], 'AAPL')
+        self.assertEqual(payload['recommended_gamma'], 0.5)
+        self.assertEqual(len(payload['metrics_by_gamma']), 2)
+
 
 class AnalyticsTests(TestCase):
     def setUp(self) -> None:
@@ -194,6 +228,34 @@ class AnalyticsTests(TestCase):
 
 
 class QuantResearchTests(TestCase):
+    def test_leaky_reconstruction_reduces_biased_recursive_error(self) -> None:
+        standard = reconstruct_differenced_forecast(100, [1, 1, 1, 1], gamma=1.0)
+        leaky = reconstruct_differenced_forecast(100, [1, 1, 1, 1], gamma=0.5)
+        actual = [101, 101, 101, 101]
+
+        standard_mae = sum(abs(forecast - value) for forecast, value in zip(standard, actual)) / len(actual)
+        leaky_mae = sum(abs(forecast - value) for forecast, value in zip(leaky, actual)) / len(actual)
+
+        self.assertEqual(standard, [101, 102, 103, 104])
+        self.assertLess(leaky_mae, standard_mae)
+
+    def test_leaky_experiment_scans_gamma_values(self) -> None:
+        start = date(2025, 1, 1)
+        prices = [100, 101, 102, 103, 104, 105, 105, 105, 105, 105, 105]
+        bars = [HistoricalBar(start + timedelta(days=index), price, price, price, price, 1000)
+                for index, price in enumerate(prices)]
+
+        result = run_leaky_integrator_experiment(
+            bars,
+            train_window=5,
+            horizon=5,
+            gamma_values=[1.0, 0.5],
+        )
+
+        self.assertEqual(result['recommended_gamma'], 0.5)
+        self.assertGreater(result['relative_mae_improvement'], 0)
+        self.assertEqual(result['parameters']['sample_count'], len(prices) - 5 - 5)
+
     def test_sma_cross_returns_metrics_and_trades(self) -> None:
         start = date(2025, 1, 1)
         prices = [10, 10, 10, 11, 12, 13, 12, 11, 10, 9, 10, 11, 12]

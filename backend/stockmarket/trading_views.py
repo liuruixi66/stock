@@ -9,7 +9,7 @@ from market_data import MarketDataError, get_provider
 from .analytics import build_account_analytics
 from .models import ResearchRun, SimulationAccount, SimulationOrder, WatchlistItem
 from .paper_trading import TradingError, create_account, submit_order
-from .quant_research import ResearchError, run_portfolio_baseline, run_sma_cross
+from .quant_research import ResearchError, run_leaky_integrator_experiment, run_portfolio_baseline, run_sma_cross
 
 
 def _account_data(account: SimulationAccount) -> dict:
@@ -287,6 +287,47 @@ def portfolio_backtest(request):
         })
         return JsonResponse({'success': True, 'data': result})
     except (KeyError, TypeError, ValueError, ResearchError, MarketDataError) as exc:
+        return JsonResponse({'success': False, 'error': str(exc)}, status=400)
+
+
+@csrf_exempt
+def leaky_forecast_experiment(request):
+    """执行递归差分预测的 leaky-integrator 误差修正实验。"""
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
+    try:
+        data = json.loads(request.body or '{}')
+        market = data.get('market', 'A').upper()
+        symbol = str(data.get('symbol', '')).strip().upper()
+        if not symbol:
+            return JsonResponse({'success': False, 'error': '请提供标的代码'}, status=400)
+        end = date.fromisoformat(data.get('end_date', date.today().isoformat()))
+        start = date.fromisoformat(data.get('start_date', (end - timedelta(days=730)).isoformat()))
+        if start > end:
+            return JsonResponse({'success': False, 'error': '开始日期不能晚于结束日期'}, status=400)
+        raw_gamma_values = data.get('gamma_values') or [1.0, 0.95, 0.9, 0.8]
+        if isinstance(raw_gamma_values, str):
+            gamma_values = [float(item.strip()) for item in raw_gamma_values.split(',') if item.strip()]
+        else:
+            gamma_values = [float(item) for item in raw_gamma_values]
+        provider = get_provider(market)
+        bars = provider.get_history(symbol, start, end)
+        result = run_leaky_integrator_experiment(
+            bars=bars,
+            train_window=int(data.get('train_window', 20)),
+            horizon=int(data.get('horizon', 20)),
+            gamma_values=gamma_values,
+        )
+        result.update({
+            'market': market,
+            'symbol': symbol,
+            'data_source': provider.__class__.__name__,
+            'data_count': len(bars),
+            'start_date': start.isoformat(),
+            'end_date': end.isoformat(),
+        })
+        return JsonResponse({'success': True, 'data': result})
+    except (TypeError, ValueError, ResearchError, MarketDataError) as exc:
         return JsonResponse({'success': False, 'error': str(exc)}, status=400)
 
 

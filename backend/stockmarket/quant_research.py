@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from math import sqrt
 from statistics import mean, pstdev
-from typing import Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from market_data import HistoricalBar
 
@@ -11,6 +11,117 @@ class ResearchError(ValueError):
     """量化研究参数或历史数据不满足要求时抛出的业务异常。"""
 
     pass
+
+
+def reconstruct_differenced_forecast(
+    anchor: float,
+    predicted_differences: Iterable[float],
+    gamma: float = 1.0,
+) -> list[float]:
+    """将一步差分预测还原为价格路径，gamma=1 为普通累加还原。"""
+    if not 0 < gamma <= 1:
+        raise ResearchError('gamma 必须在 0 到 1 之间，且不能等于 0')
+    accumulated = 0.0
+    path = []
+    for difference in predicted_differences:
+        accumulated = float(difference) + gamma * accumulated
+        path.append(float(anchor) + accumulated)
+    return path
+
+
+def _forecast_error_metrics(forecasts: list[float], actuals: list[float], anchor: float) -> dict:
+    errors = [forecast - actual for forecast, actual in zip(forecasts, actuals)]
+    absolute_errors = [abs(error) for error in errors]
+    squared_errors = [error ** 2 for error in errors]
+    actual_direction = 1 if actuals[-1] > anchor else -1 if actuals[-1] < anchor else 0
+    forecast_direction = 1 if forecasts[-1] > anchor else -1 if forecasts[-1] < anchor else 0
+    return {
+        'mae': mean(absolute_errors),
+        'rmse': sqrt(mean(squared_errors)),
+        'final_error': errors[-1],
+        'direction_hit': forecast_direction == actual_direction,
+    }
+
+
+def run_leaky_integrator_experiment(
+    bars: Sequence[HistoricalBar],
+    train_window: int = 20,
+    horizon: int = 20,
+    gamma_values: Sequence[float] | None = None,
+) -> dict:
+    """比较普通累加与 leaky-integrator 对差分递归预测误差的影响。
+
+    实验使用滚动窗口的一步差分均值作为最小可复现预测器：每个预测起点只使用
+    起点及之前的价格差分，随后把同一个一步差分预测递归还原成多步价格路径。
+    这能隔离还原算子本身的误差累积问题，不把效果归因给复杂模型训练。
+    """
+    gamma_values = gamma_values or (1.0, 0.95, 0.9, 0.8)
+    if train_window < 2:
+        raise ResearchError('train_window 必须至少为 2')
+    if horizon < 1:
+        raise ResearchError('horizon 必须大于 0')
+    if len(bars) <= train_window + horizon:
+        raise ResearchError(f'历史数据不足，至少需要 {train_window + horizon + 1} 根K线')
+    for gamma in gamma_values:
+        if not 0 < gamma <= 1:
+            raise ResearchError('gamma_values 中的每个 gamma 都必须在 0 到 1 之间，且不能等于 0')
+
+    closes = [float(bar.close) for bar in bars]
+    dates = [bar.date for bar in bars]
+    differences = [closes[index] - closes[index - 1] for index in range(1, len(closes))]
+    observations = {gamma: [] for gamma in gamma_values}
+    horizon_absolute_errors = {gamma: [[] for _ in range(horizon)] for gamma in gamma_values}
+
+    for origin in range(train_window, len(closes) - horizon):
+        trailing_differences = differences[origin - train_window:origin]
+        one_step_difference = mean(trailing_differences)
+        predicted_differences = [one_step_difference] * horizon
+        actual_path = closes[origin + 1:origin + horizon + 1]
+        anchor = closes[origin]
+        for gamma in gamma_values:
+            forecast_path = reconstruct_differenced_forecast(anchor, predicted_differences, gamma)
+            for step, (forecast, actual) in enumerate(zip(forecast_path, actual_path)):
+                horizon_absolute_errors[gamma][step].append(abs(forecast - actual))
+            metrics = _forecast_error_metrics(forecast_path, actual_path, anchor)
+            observations[gamma].append({
+                'origin_date': dates[origin].isoformat(),
+                'forecast_end_date': dates[origin + horizon].isoformat(),
+                **metrics,
+            })
+
+    gamma_metrics = []
+    for gamma, items in observations.items():
+        gamma_metrics.append({
+            'gamma': gamma,
+            'mae': round(mean(item['mae'] for item in items), 6),
+            'rmse': round(mean(item['rmse'] for item in items), 6),
+            'mean_final_error': round(mean(item['final_error'] for item in items), 6),
+            'direction_accuracy': round(
+                sum(1 for item in items if item['direction_hit']) / len(items) * 100,
+                4,
+            ),
+            'horizon_mae': [round(mean(errors), 6) for errors in horizon_absolute_errors[gamma]],
+        })
+
+    gamma_metrics.sort(key=lambda item: (item['mae'], item['rmse']))
+    standard = next(item for item in gamma_metrics if item['gamma'] == 1.0)
+    best = gamma_metrics[0]
+    return {
+        'experiment': 'leaky_integrator_differenced_forecast',
+        'parameters': {
+            'train_window': train_window,
+            'horizon': horizon,
+            'gamma_values': list(gamma_values),
+            'sample_count': len(next(iter(observations.values()))),
+        },
+        'baseline_gamma': 1.0,
+        'recommended_gamma': best['gamma'],
+        'relative_mae_improvement': round(
+            (standard['mae'] - best['mae']) / standard['mae'] * 100,
+            4,
+        ) if standard['mae'] else 0.0,
+        'metrics_by_gamma': gamma_metrics,
+    }
 
 
 def _aligned_closes(
