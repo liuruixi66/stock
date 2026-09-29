@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from decimal import Decimal
 
@@ -58,6 +59,11 @@ class IbBroker(BrokerAdapter):
         host = env('IB_HOST', '127.0.0.1')
         port = int(env('IB_PORT', '7496' if self.is_live else '7497'))
         client_id = int(env('IB_CLIENT_ID', '17'))
+        # Django 工作线程默认没有事件循环，而 ib_async 的同步接口依赖它
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
         ib = module.IB()
         try:
             ib.connect(host, port, clientId=client_id, timeout=10)

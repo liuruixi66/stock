@@ -69,13 +69,14 @@ def create_account(
         raise TradingError(f'{adapter_cls.label} 不支持实盘')
     try:
         snapshot = adapter_cls(account).get_account()
+        # 以绑定时的券商总资产作为收益率基准
+        account.initial_cash = _money(snapshot.total_assets)
+        account.cash = _money(snapshot.cash)
+        with transaction.atomic():
+            account.save()
+            sync_account(account)
     except BrokerError as exc:
         raise TradingError(f'无法连接券商：{exc}') from exc
-    # 以绑定时的券商总资产作为收益率基准
-    account.initial_cash = _money(snapshot.total_assets)
-    account.cash = _money(snapshot.cash)
-    account.save()
-    sync_account(account)
     return account
 
 

@@ -1,5 +1,7 @@
 from django.db import models
 
+from brokers.registry import BROKER_CHOICES
+
 class StockAttention(models.Model):
     """我的关注"""
     datetime = models.DateTimeField('日期')
@@ -484,7 +486,7 @@ class StockHistoryData(models.Model):
 
 class SimulationAccount(models.Model):
     MARKET_CHOICES = [('A', 'A股'), ('US', '美股'), ('CRYPTO', '虚拟货币')]
-    BROKER_CHOICES = [('SIM', '内置模拟撮合'), ('FUTU', '富途 OpenD'), ('QMT', '迅投 QMT'), ('IB', '盈透 IBKR')]
+    BROKER_CHOICES = BROKER_CHOICES
     MODE_CHOICES = [('PAPER', '模拟盘'), ('LIVE', '实盘')]
 
     name = models.CharField('账户名称', max_length=80, unique=True)
