@@ -79,15 +79,11 @@
       </section>
 
       <aside class="trade-panel">
-        <div class="panel-heading"><div><span>PAPER EXECUTION</span><h2>模拟盘</h2></div></div>
-        <div v-if="!accounts.length" class="empty-account">
-          <input v-model="newAccountName" placeholder="研究账户名称" />
-          <button class="command" @click="createAccount">创建 {{ accountCurrency }} 账户</button>
-        </div>
-        <template v-else>
-          <label class="account-select">模拟账户
+        <div class="panel-heading"><div><span>EXECUTION</span><h2>交易执行</h2></div></div>
+        <template v-if="marketAccounts.length">
+          <label class="account-select">交易账户
             <select v-model.number="selectedAccountId" @change="loadAccount">
-              <option v-for="account in marketAccounts" :key="account.id" :value="account.id">{{ account.name }}</option>
+              <option v-for="account in marketAccounts" :key="account.id" :value="account.id">{{ account.name }} · {{ account.broker_label }}{{ account.trading_mode === 'LIVE' ? '（实盘）' : '' }}</option>
             </select>
           </label>
           <div v-if="summary" class="account-summary">
@@ -95,15 +91,39 @@
             <div><span>可用资金</span><strong>{{ summary.cash.toFixed(2) }}</strong></div>
             <div><span>累计收益</span><strong :class="summary.total_return >= 0 ? 'up' : 'down'">{{ summary.total_return.toFixed(2) }}%</strong></div>
           </div>
+          <p v-if="summary?.sync_error" class="sync-error">券商同步失败：{{ summary.sync_error }}</p>
+          <div v-if="selectedAccount?.is_external" class="broker-meta">
+            <span>{{ selectedAccount.broker_label }} · {{ selectedAccount.trading_mode === 'LIVE' ? '实盘' : '模拟盘' }}<template v-if="summary?.last_synced_at"> · 同步于 {{ formatTime(summary.last_synced_at) }}</template></span>
+            <button class="command ghost" :disabled="syncing" @click="syncAccount">{{ syncing ? '同步中…' : '同步券商' }}</button>
+          </div>
           <div class="order-ticket">
             <div class="side-toggle"><button :class="{ active: order.side === 'BUY' }" @click="order.side = 'BUY'">买入</button><button :class="{ active: order.side === 'SELL' }" @click="order.side = 'SELL'">卖出</button></div>
             <label>代码<input v-model="order.symbol" /></label>
             <label>数量<input v-model.number="order.quantity" type="number" :step="market === 'A' ? 100 : market === 'CRYPTO' ? 0.0001 : 1" :min="market === 'CRYPTO' ? 0.00000001 : 1" /></label>
             <label>订单类型<select v-model="order.order_type"><option value="MARKET">市价单</option><option value="LIMIT">限价单</option></select></label>
             <label v-if="order.order_type === 'LIMIT'">限价<input v-model.number="order.price" type="number" step="0.01" /></label>
-            <button class="submit-order" @click="submitOrder">提交模拟订单</button>
+            <button class="submit-order" :class="{ live: selectedAccount?.trading_mode === 'LIVE' }" :disabled="submitting" @click="submitOrder">{{ submitting ? '提交中…' : selectedAccount?.trading_mode === 'LIVE' ? '提交实盘订单' : '提交模拟订单' }}</button>
           </div>
         </template>
+        <details class="new-account" :open="!marketAccounts.length">
+          <summary>新建账户 / 接入券商</summary>
+          <div class="empty-account">
+            <input v-model="newAccountName" placeholder="账户名称" />
+            <label class="account-select">券商通道
+              <select v-model="newAccount.broker">
+                <option v-for="broker in marketBrokers" :key="broker.code" :value="broker.code">{{ broker.label }}{{ broker.sdk_installed ? '' : '（未安装 SDK）' }}</option>
+              </select>
+            </label>
+            <template v-if="selectedBroker?.external">
+              <label class="account-select">券商账号 ID<input v-model="newAccount.broker_account_id" :placeholder="brokerIdPlaceholder" /></label>
+              <label v-if="selectedBroker.supports_live" class="account-select">交易模式
+                <select v-model="newAccount.trading_mode"><option value="PAPER">模拟盘</option><option value="LIVE">实盘（需服务端 LIVE_TRADING_ENABLED=1）</option></select>
+              </label>
+              <p class="broker-notes">{{ selectedBroker.notes }}<br />服务端环境变量：{{ selectedBroker.env_vars.join(', ') || '无' }}</p>
+            </template>
+            <button class="command" :disabled="creatingAccount" @click="createAccount">{{ creatingAccount ? '连接券商中…' : `创建 ${accountCurrency} 账户` }}</button>
+          </div>
+        </details>
       </aside>
     </div>
 
@@ -158,26 +178,38 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import * as echarts from 'echarts'
 import { paperTradingApi, researchApi, watchlistApi } from '@/api/stock'
 
 type Market = 'A' | 'US' | 'CRYPTO'
-interface PaperAccount { id: number; name: string; market: Market; currency: string }
+interface PaperAccount {
+  id: number; name: string; market: Market; currency: string
+  broker: string; broker_label: string; trading_mode: 'PAPER' | 'LIVE'; is_external: boolean; last_synced_at: string | null
+}
+interface BrokerInfo {
+  code: string; label: string; markets: Market[]; supports_live: boolean; external: boolean
+  sdk_installed: boolean; env_vars: string[]; notes: string
+}
 interface WatchItem { id: number; market: Market; symbol: string; name: string }
 const market = ref<Market>('A')
 const symbols = ref('000001,600519')
 const cryptoSymbols = ['BNBUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'ZECUSDT']
 const quotes = ref<any[]>([])
 const accounts = ref<PaperAccount[]>([])
+const brokers = ref<BrokerInfo[]>([])
 const selectedAccountId = ref<number>()
 const summary = ref<any>()
 const backtest = ref<any>()
 const error = ref('')
 const loadingQuotes = ref(false)
 const runningBacktest = ref(false)
+const creatingAccount = ref(false)
+const syncing = ref(false)
+const submitting = ref(false)
 const newAccountName = ref('A股研究账户')
+const newAccount = reactive({ broker: 'SIM', broker_account_id: '', trading_mode: 'PAPER' })
 const chartElement = ref<HTMLElement>()
 let chart: echarts.ECharts | undefined
 
@@ -220,6 +252,21 @@ function selectCrypto(symbol: string) {
   loadQuotes()
 }
 const accountCurrency = computed(() => market.value === 'A' ? 'CNY' : market.value === 'US' ? 'USD' : 'USDT')
+const selectedAccount = computed(() => accounts.value.find((item) => item.id === selectedAccountId.value))
+const marketBrokers = computed(() => brokers.value.filter((item) => item.markets.includes(market.value)))
+const selectedBroker = computed(() => brokers.value.find((item) => item.code === newAccount.broker))
+const brokerIdPlaceholder = computed(() => ({
+  FUTU: '富途 acc_id（留空则用第一个匹配账户）',
+  IB: 'IB 账号，如 DU1234567（留空则用默认账号）',
+  QMT: 'QMT 资金账号（必填）',
+} as Record<string, string>)[newAccount.broker] ?? '')
+watch(marketBrokers, (list) => {
+  if (!list.some((item) => item.code === newAccount.broker)) newAccount.broker = 'SIM'
+})
+async function loadBrokers() {
+  try { brokers.value = (await paperTradingApi.getBrokers()).data.data.brokers }
+  catch (value) { showError(value) }
+}
 async function loadWatchlist() {
   try { watchlist.value = (await watchlistApi.list()).data.data; syncMarketWatchlist() }
   catch (value) { showError(value) }
@@ -277,21 +324,39 @@ function syncMarketAccounts() {
   if (selectedAccountId.value) loadAccount()
 }
 async function createAccount() {
-  try { await paperTradingApi.createAccount({ name: newAccountName.value, market: market.value, initial_cash: 100000 }); await loadAccounts() }
-  catch (value) { showError(value) }
+  creatingAccount.value = true; error.value = ''
+  try {
+    await paperTradingApi.createAccount({ name: newAccountName.value, market: market.value, initial_cash: 100000, ...newAccount })
+    newAccount.broker_account_id = ''
+    await loadAccounts()
+  } catch (value) { showError(value) }
+  finally { creatingAccount.value = false }
 }
 async function loadAccount() {
   if (!selectedAccountId.value) return
-  summary.value = (await paperTradingApi.getSummary(selectedAccountId.value)).data.data
+  try { summary.value = (await paperTradingApi.getSummary(selectedAccountId.value)).data.data }
+  catch (value) { showError(value) }
+}
+async function syncAccount() {
+  if (!selectedAccountId.value) return
+  syncing.value = true; error.value = ''
+  try { await paperTradingApi.syncAccount(selectedAccountId.value); await loadAccounts() }
+  catch (value) { showError(value) }
+  finally { syncing.value = false }
 }
 async function submitOrder() {
   if (!selectedAccountId.value) return
-  try { await paperTradingApi.submitOrder({ ...order, account_id: selectedAccountId.value }); await loadAccount() }
-  catch (value) { showError(value) }
+  submitting.value = true; error.value = ''
+  try {
+    const { data } = await paperTradingApi.submitOrder({ ...order, account_id: selectedAccountId.value })
+    if (!data.success) error.value = `订单被拒绝：${data.data?.message || '未知原因'}`
+    await loadAccount()
+  } catch (value) { showError(value) }
+  finally { submitting.value = false }
 }
 function resizeChart() { chart?.resize() }
 onMounted(() => {
-  loadWatchlist(); loadQuotes(); loadAccounts(); loadRuns(); window.addEventListener('resize', resizeChart)
+  loadWatchlist(); loadQuotes(); loadBrokers(); loadAccounts(); loadRuns(); window.addEventListener('resize', resizeChart)
   quoteRefreshTimer = setInterval(loadQuotes, 30000)
 })
 onUnmounted(() => {
@@ -302,5 +367,5 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.terminal-page{min-height:100vh;padding:34px;background:#f4f6f7;color:#14201f;font-family:"Avenir Next","Helvetica Neue",sans-serif}.terminal-header{display:flex;justify-content:space-between;align-items:end;padding-bottom:22px;border-bottom:1px solid #ccd5d3}.eyebrow,.panel-heading span{font-size:11px;font-weight:700;letter-spacing:1.8px;color:#657570}.terminal-header h1{margin:5px 0 0;font-family:Georgia,serif;font-size:36px;font-weight:500;letter-spacing:0}.market-toggle,.side-toggle{display:flex;border:1px solid #aebbb8}.market-toggle button,.side-toggle button{border:0;background:#fff;padding:10px 22px;cursor:pointer}.market-toggle .active,.side-toggle .active{background:#123c35;color:#fff}.ticker-strip{display:flex;align-items:end;gap:14px;padding:18px 0;overflow:auto}.ticker-strip label{min-width:220px}.ticker-strip label span{display:block;font-size:12px;margin-bottom:5px;color:#657570}.ticker-strip input,input,select{box-sizing:border-box;width:100%;border:1px solid #b9c5c2;background:#fff;padding:10px 12px;font:inherit}.command{display:flex;align-items:center;gap:8px;border:0;background:#006d5b;color:white;padding:11px 16px;cursor:pointer;white-space:nowrap}.command:disabled{opacity:.55}.quote{min-width:142px;border-left:2px solid #d2dad8;padding:3px 12px}.quote span,.quote em{display:block}.quote em{font-style:normal;font-size:12px}.up{color:#b42318!important}.down{color:#087a65!important}.error-banner{padding:10px 14px;background:#fff0ed;border-left:3px solid #b42318}.workspace-grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);gap:18px}.research-panel,.trade-panel,.positions-section{background:#fff;border:1px solid #dbe2e0;padding:22px}.panel-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}.panel-heading h2{margin:3px 0 0;font-family:Georgia,serif;font-size:23px;font-weight:500}.parameter-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.parameter-grid label,.order-ticket label,.account-select{font-size:12px;color:#596a66}.parameter-grid input,.order-ticket input,.order-ticket select,.account-select select{margin-top:6px}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);margin-top:18px;border-block:1px solid #e2e7e6}.metric-grid article{padding:14px;border-right:1px solid #e2e7e6}.metric-grid article:last-child{border:0}.metric-grid span,.account-summary span{display:block;font-size:11px;color:#71807c}.metric-grid strong{font-size:22px}.equity-chart{height:310px}.empty-account{display:grid;gap:10px}.account-summary{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:16px 0;border-bottom:1px solid #e2e7e6}.account-summary div:first-child{grid-column:1/-1}.account-summary strong{display:block;margin-top:3px;font-size:20px}.order-ticket{display:grid;gap:12px;margin-top:18px}.side-toggle button{width:50%}.submit-order{border:0;background:#b89136;color:#151912;padding:12px;font-weight:700;cursor:pointer}.positions-section{margin-top:18px}table{width:100%;border-collapse:collapse}th,td{text-align:right;padding:11px;border-bottom:1px solid #e5e9e8}th:first-child,td:first-child{text-align:left}.watchlist-strip{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 0}.strip-title{font-size:11px;font-weight:700;letter-spacing:1.8px;color:#657570}.watch-chip{display:inline-flex;align-items:center;gap:8px;border:1px solid #b9c5c2;background:#fff;padding:7px 11px;cursor:pointer;font:inherit}.watch-chip em{font-style:normal;font-size:12px;color:#71807c}.watch-chip .remove{font-style:normal;color:#b42318}.strip-empty{font-size:12px;color:#8a9793}.watch-input{width:140px}.command.ghost{background:#fff;color:#123c35;border:1px solid #123c35}.empty-hint{margin:0;font-size:13px;color:#8a9793}.heading-actions{display:flex;gap:8px}.command.ghost{text-decoration:none}.link-button{border:0;background:none;color:#006d5b;cursor:pointer;text-decoration:underline}.memo{font-size:12px;color:#5d6c68}.run-detail{text-align:left;background:#f7f9f9;font-size:12px}.trade-lines{display:grid;gap:4px}@media(max-width:900px){.terminal-page{padding:20px}.terminal-header{align-items:start;gap:18px}.terminal-header h1{font-size:29px}.workspace-grid{grid-template-columns:1fr}.parameter-grid,.metric-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:540px){.terminal-header{display:grid}.parameter-grid{grid-template-columns:1fr}.positions-section{overflow:auto}}
+.terminal-page{min-height:100vh;padding:34px;background:#f4f6f7;color:#14201f;font-family:"Avenir Next","Helvetica Neue",sans-serif}.terminal-header{display:flex;justify-content:space-between;align-items:end;padding-bottom:22px;border-bottom:1px solid #ccd5d3}.eyebrow,.panel-heading span{font-size:11px;font-weight:700;letter-spacing:1.8px;color:#657570}.terminal-header h1{margin:5px 0 0;font-family:Georgia,serif;font-size:36px;font-weight:500;letter-spacing:0}.market-toggle,.side-toggle{display:flex;border:1px solid #aebbb8}.market-toggle button,.side-toggle button{border:0;background:#fff;padding:10px 22px;cursor:pointer}.market-toggle .active,.side-toggle .active{background:#123c35;color:#fff}.ticker-strip{display:flex;align-items:end;gap:14px;padding:18px 0;overflow:auto}.ticker-strip label{min-width:220px}.ticker-strip label span{display:block;font-size:12px;margin-bottom:5px;color:#657570}.ticker-strip input,input,select{box-sizing:border-box;width:100%;border:1px solid #b9c5c2;background:#fff;padding:10px 12px;font:inherit}.command{display:flex;align-items:center;gap:8px;border:0;background:#006d5b;color:white;padding:11px 16px;cursor:pointer;white-space:nowrap}.command:disabled{opacity:.55}.quote{min-width:142px;border-left:2px solid #d2dad8;padding:3px 12px}.quote span,.quote em{display:block}.quote em{font-style:normal;font-size:12px}.up{color:#b42318!important}.down{color:#087a65!important}.error-banner{padding:10px 14px;background:#fff0ed;border-left:3px solid #b42318}.workspace-grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);gap:18px}.research-panel,.trade-panel,.positions-section{background:#fff;border:1px solid #dbe2e0;padding:22px}.panel-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}.panel-heading h2{margin:3px 0 0;font-family:Georgia,serif;font-size:23px;font-weight:500}.parameter-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.parameter-grid label,.order-ticket label,.account-select{font-size:12px;color:#596a66}.parameter-grid input,.order-ticket input,.order-ticket select,.account-select select{margin-top:6px}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);margin-top:18px;border-block:1px solid #e2e7e6}.metric-grid article{padding:14px;border-right:1px solid #e2e7e6}.metric-grid article:last-child{border:0}.metric-grid span,.account-summary span{display:block;font-size:11px;color:#71807c}.metric-grid strong{font-size:22px}.equity-chart{height:310px}.empty-account{display:grid;gap:10px}.account-select input{margin-top:6px}.new-account{margin-top:18px;border-top:1px solid #e2e7e6;padding-top:12px}.new-account summary{cursor:pointer;font-size:12px;letter-spacing:.6px;color:#596a66}.new-account .empty-account{margin-top:12px}.broker-notes{margin:0;font-size:11px;line-height:1.55;color:#71807c}.broker-meta{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px;font-size:12px;color:#596a66}.broker-meta .command{padding:7px 12px;font-size:12px}.sync-error{margin:10px 0 0;font-size:12px;color:#b42318}.submit-order.live{background:#b42318;color:#fff}.submit-order:disabled{opacity:.55;cursor:default}.account-summary{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:16px 0;border-bottom:1px solid #e2e7e6}.account-summary div:first-child{grid-column:1/-1}.account-summary strong{display:block;margin-top:3px;font-size:20px}.order-ticket{display:grid;gap:12px;margin-top:18px}.side-toggle button{width:50%}.submit-order{border:0;background:#b89136;color:#151912;padding:12px;font-weight:700;cursor:pointer}.positions-section{margin-top:18px}table{width:100%;border-collapse:collapse}th,td{text-align:right;padding:11px;border-bottom:1px solid #e5e9e8}th:first-child,td:first-child{text-align:left}.watchlist-strip{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 0}.strip-title{font-size:11px;font-weight:700;letter-spacing:1.8px;color:#657570}.watch-chip{display:inline-flex;align-items:center;gap:8px;border:1px solid #b9c5c2;background:#fff;padding:7px 11px;cursor:pointer;font:inherit}.watch-chip em{font-style:normal;font-size:12px;color:#71807c}.watch-chip .remove{font-style:normal;color:#b42318}.strip-empty{font-size:12px;color:#8a9793}.watch-input{width:140px}.command.ghost{background:#fff;color:#123c35;border:1px solid #123c35}.empty-hint{margin:0;font-size:13px;color:#8a9793}.heading-actions{display:flex;gap:8px}.command.ghost{text-decoration:none}.link-button{border:0;background:none;color:#006d5b;cursor:pointer;text-decoration:underline}.memo{font-size:12px;color:#5d6c68}.run-detail{text-align:left;background:#f7f9f9;font-size:12px}.trade-lines{display:grid;gap:4px}@media(max-width:900px){.terminal-page{padding:20px}.terminal-header{align-items:start;gap:18px}.terminal-header h1{font-size:29px}.workspace-grid{grid-template-columns:1fr}.parameter-grid,.metric-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:540px){.terminal-header{display:grid}.parameter-grid{grid-template-columns:1fr}.positions-section{overflow:auto}}
 </style>

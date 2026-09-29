@@ -45,8 +45,12 @@ export const watchlistApi = {
 
 export const paperTradingApi = {
     getAccounts: () => api.get('/paper/accounts/'),
-    createAccount: (data: any) => api.post('/paper/accounts/', data),
-    getSummary: (accountId: number) => api.get(`/paper/accounts/${accountId}/summary/`),
+    getBrokers: () => api.get('/paper/brokers/'),
+    createAccount: (data: any) => api.post('/paper/accounts/', data, { timeout: 60000 }),
+    syncAccount: (accountId: number) => api.post(`/paper/accounts/${accountId}/sync/`, {}, { timeout: 60000 }),
+    getSummary: (accountId: number) => api.get(`/paper/accounts/${accountId}/summary/`, { timeout: 60000 }),
     getAnalytics: (accountId: number) => api.get(`/paper/accounts/${accountId}/analytics/`),
-    submitOrder: (data: any) => api.post('/paper/orders/', data),
+    getOrders: (accountId?: number) => api.get('/paper/orders/', { params: { account_id: accountId } }),
+    submitOrder: (data: any) => api.post('/paper/orders/', data, { timeout: 60000 }),
+    cancelOrder: (orderId: number) => api.post(`/paper/orders/${orderId}/cancel/`, {}, { timeout: 60000 }),
 }
