@@ -74,10 +74,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 
 const route = useRoute()
-const router = useRouter()
 
 const isSidebarCollapsed = ref(false)
 const openSections = ref<boolean[]>([true, true, true, true, true])
@@ -102,131 +101,37 @@ const menuSections = ref<MenuSection[]>([
   {
     title: '首页',
     icon: 'fa fa-home',
-    items: [
-    ]
+    items: []
   },
   {
-    title: '数据管理',
-    icon: 'fa fa-database',
+    title: '研究与交易',
+    icon: 'fa fa-chart-line',
     items: [
-      { 
-        name: '历史数据', 
-        path: '/tables',
-        isOpen: false,
-        children: [
-          { name: '每日股票数据', path: '/tables/stock-spot' },
-          { name: '股票资金流向', path: '/tables/stock-fund-flow' },
-          { name: '股票分红配送', path: '/tables/stock-bonus' },
-          { name: '股票龙虎榜', path: '/tables/stock-top' },
-          { name: '股票大宗交易', path: '/tables/stock-blocktrade' },
-          { name: '行业资金流向', path: '/tables/industry-fund-flow' },
-          { name: '概念资金流向', path: '/tables/concept-fund-flow' },
-          { name: '每日ETF数据', path: '/tables/etf-spot' }
-        ]
-      },
-      { 
-        name: '实时数据', 
-        path: '/realtime',
-        isOpen: false,
-        children: [
-          { name: '股票的实时数据', path: '/realtime/quote' }
-        ]
-      }
-    ]
-  },
-
-  {
-    title: '策略管理',
-    icon: 'fa fa-area-chart',
-    items: [
-      { 
-        name: '策略选股', 
-        path: '/menu-layout',
+      {
+        name: '量化研究交易台',
+        path: '/research-terminal',
         isOpen: false,
       },
-      { 
-        name: '策略库', 
-        path: '/stock/realtime-data',
-        isOpen: false,
-      },
-
       { 
         name: '回测详情', 
         path: '/backtest-details',
         isOpen: false,
-      },
-
-      { 
-        name: '策略排行', 
-        path: '/stock/realtime-data',
-        isOpen: false,
-      },
-      { 
-        name: '策略实时收益展示', 
-        path: '/stock/realtime-data',
-        isOpen: false,
       }
     ]
   },
   {
-    title: '交易管理',
-    icon: 'fa fa-puzzle-piece',
-    items: [
-       { 
-        name: '策略实盘', 
-        path: '/stock/realtime-data',
-        isOpen: false,
-      },
-      { 
-        name: '交易详情', 
-        path: '/stock/realtime-data',
-        isOpen: false,
-        children: [
-          { name: '每日交易情况', path: '/stock/realtime/quote' }
-        ]
-      },
-      { 
-        name: '消息通知', 
-        path: '/stock/realtime-data',
-        isOpen: false,
-        children: [
-          { name: '微信', path: '/stock/realtime/quote' }
-        ]
-      }
-    ]
-  },
-  {
-    title: '用户管理',
-    icon: 'fa fa-puzzle-piece',
+    title: '分析报告',
+    icon: 'fa fa-file-lines',
     items: [
       { 
-        name: '注册账号', 
-        path: '/stock/realtime-data',
+        name: '收益概览',
+        path: '/earnings-overview',
         isOpen: false,
-        children: [
-          { name: '手机号注册', path: '/stock/realtime/quote' },
-          { name: '微信号注册', path: '/stock/realtime/quote' },
-          { name: '密码找回', path: '/stock/realtime/quote' },
-          { name: '验证码登录', path: '/stock/realtime/quote' }
-        ]
       },
       { 
-        name: '用户信息管理', 
-        path: '/stock/realtime-data',
+        name: '交易记录',
+        path: '/transaction-details',
         isOpen: false,
-        children: [
-          { name: '头像', path: '/stock/realtime/quote' },
-          { name: '手机号', path: '/stock/realtime/quote' }
-        ]
-      },
-      { 
-        name: '用户权限管理', 
-        path: '/stock/realtime-data',
-        isOpen: false,
-        children: [
-          { name: '角色划分', path: '/stock/realtime/quote' },
-          { name: '权限划分', path: '/stock/realtime/quote' }
-        ]
       }
     ]
   }
@@ -276,12 +181,7 @@ const isMenuItemActive = (item: MenuItem) => {
 }
 
 const toggleSection = (index: number) => {
-  // 如果是选股中心(index为2)，则直接导航到对应页面
-  if (index === 2) {
-    router.push('/menu-layout')
-  } else {
-    openSections.value[index] = !openSections.value[index]
-  }
+  openSections.value[index] = !openSections.value[index]
 }
 
 const toggleSubMenu = (section: any, itemIndex: number) => {

@@ -1,9 +1,10 @@
 import pandas as pd
 
 def resample_to_period(df, period='D', price_col='close'):
-    """
-    按 period 分割数据，period='D'为日，'W'为周，'M'为月
-    返回分组后的 DataFrame
+    """按周期聚合行情，并保留每个周期最后一个交易日的记录。
+
+    ``price_col`` 是兼容旧调用的参数，目前聚合规则对所有列统一取末值；
+    调用方应确保输入包含可转换为日期的 ``date`` 列。
     """
     df = df.sort_values('date')
     df['date'] = pd.to_datetime(df['date'])
@@ -21,6 +22,9 @@ def calculate_kdj(high, low, close, n=9):
         n: 计算周期，默认9
     返回:
         包含K、D、J值的字典
+
+    数据不足一个完整周期时返回全 50 的占位序列；每个周期最高价等于
+    最低价时同样将 RSV 设为 50，以避免除零并保持指标中性。
     """
     high = pd.Series(high)
     low = pd.Series(low)
@@ -34,7 +38,7 @@ def calculate_kdj(high, low, close, n=9):
             'j': [50] * len(close)
         }
     
-    # 计算RSV
+    # 先计算 RSV，再用平滑递推得到 K、D，J 是 K/D 的派生值。
     rsv = []
     for i in range(len(close)):
         if i < n - 1:

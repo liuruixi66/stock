@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any, Union
 import pandas as pd
 
 class SystemAdapter:
-    """系统适配器 - 自动识别并适配不同操作系统"""
+    """根据操作系统选择原生交易模块或兼容实现。"""
     
     def __init__(self):
         self.system = platform.system().lower()
@@ -21,14 +21,14 @@ class SystemAdapter:
         print(f"🐍 Python版本: {sys.version}")
         
     def get_trading_modules(self) -> Dict[str, Any]:
-        """根据系统返回相应的交易模块"""
+        """返回统一的交易模块字典，供调用方避免直接判断操作系统。"""
         if self.is_windows:
             return self._get_windows_modules()
         else:
             return self._get_linux_modules()
     
     def _get_windows_modules(self) -> Dict[str, Any]:
-        """Windows系统的交易模块"""
+        """优先加载 Windows 原生 xtquant，缺少依赖时回退到兼容模块。"""
         try:
             # 尝试导入Windows原生模块
             import xtquant.xtdata as xtdata
@@ -45,7 +45,7 @@ class SystemAdapter:
             return self._get_linux_modules()
     
     def _get_linux_modules(self) -> Dict[str, Any]:
-        """Linux系统的模拟交易模块"""
+        """加载 Linux/macOS 上用于开发和测试的兼容交易模块。"""
         from xtdata_compatible import XTDataCompatible
         from xtclient_compatible import XTClientCompatible
         
@@ -61,7 +61,7 @@ system_adapter = SystemAdapter()
 trading_modules = system_adapter.get_trading_modules()
 
 def get_system_info() -> Dict[str, str]:
-    """获取系统信息"""
+    """返回操作系统、机器架构和 Python 版本等诊断信息。"""
     return {
         'system': platform.system(),
         'release': platform.release(),
@@ -71,15 +71,15 @@ def get_system_info() -> Dict[str, str]:
     }
 
 def is_windows() -> bool:
-    """判断是否为Windows系统"""
+    """判断当前运行环境是否为 Windows。"""
     return system_adapter.is_windows
 
 def is_linux() -> bool:
-    """判断是否为Linux系统"""
+    """判断当前运行环境是否为 Linux。"""
     return system_adapter.is_linux
 
 def get_compatible_path(path: str) -> str:
-    """获取兼容的文件路径"""
+    """按当前系统转换路径分隔符，不负责验证路径是否存在。"""
     if system_adapter.is_windows:
         return path.replace('/', '\\')
     else:
