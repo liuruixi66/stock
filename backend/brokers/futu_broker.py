@@ -196,3 +196,18 @@ class FutuBroker(BrokerAdapter):
                     market_value=to_decimal(row.get('market_val')),
                 ))
             return positions
+
+    def list_accounts(self) -> list[dict]:
+        with self._session() as (futu, ctx):
+            ret, data = ctx.get_acc_list()
+            frame = self._check(futu, ret, data, '查询账号列表')
+            return [
+                {
+                    'acc_id': str(row.get('acc_id', '')),
+                    'trd_env': str(row.get('trd_env', '')),
+                    'markets': str(row.get('trdmarket_auth', '')),
+                    'acc_type': str(row.get('acc_type', '')),
+                    'sim_acc_type': str(row.get('sim_acc_type', '')),
+                }
+                for _, row in (frame.iterrows() if frame is not None else [])
+            ]

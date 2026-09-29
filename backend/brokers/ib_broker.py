@@ -189,3 +189,7 @@ class IbBroker(BrokerAdapter):
                 for p in ib.positions(code)
                 if p.contract.secType == 'STK' and Decimal(str(p.position)) > 0
             ]
+
+    def list_accounts(self) -> list[dict]:
+        with self._session() as (_module, ib):
+            return [{'acc_id': code, 'trd_env': 'PAPER' if code.startswith('D') else 'LIVE'} for code in ib.managedAccounts()]

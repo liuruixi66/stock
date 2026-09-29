@@ -133,6 +133,10 @@ class BrokerAdapter(ABC):
     def get_positions(self) -> list[PositionSnapshot]:
         """查询持仓，数量为 0 的持仓应被过滤掉。"""
 
+    def list_accounts(self) -> list[dict[str, Any]]:
+        """列出券商侧可用账号，用于首次接入时确定 broker_account_id；不支持时返回空列表。"""
+        return []
+
     @classmethod
     def describe(cls) -> dict[str, Any]:
         from importlib.util import find_spec

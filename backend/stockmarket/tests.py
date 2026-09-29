@@ -353,6 +353,82 @@ class BrokerAccountApiTests(TestCase):
         self.assertEqual(response.json()['data']['cash'], 100.0)
 
 
+class HistoryProviderStub:
+    """按给定收盘价序列返回历史 K 线，报价固定为最后一根收盘价。"""
+
+    def __init__(self, closes: list[float]) -> None:
+        self.closes = closes
+
+    def get_history(self, symbol, start, end):
+        return [HistoricalBar(date(2025, 1, 1) + timedelta(days=index), close, close, close, close, 1000)
+                for index, close in enumerate(self.closes)]
+
+    def get_quote(self, symbol):
+        return Quote(symbol=symbol, market=Market.A_SHARE, name='测试', price=self.closes[-1], previous_close=self.closes[-2],
+                     open=self.closes[-1], high=self.closes[-1], low=self.closes[-1], volume=1, currency='CNY',
+                     timestamp=datetime.now(timezone.utc), source='stub')
+
+
+class PaperStrategyCommandTests(TestCase):
+    def setUp(self) -> None:
+        self.account = SimulationAccount.objects.create(
+            name='A股策略', market='A', currency='CNY', initial_cash=Decimal('100000'), cash=Decimal('100000'),
+        )
+
+    def _run(self, closes: list[float], *extra: str) -> str:
+        stub = HistoryProviderStub(closes)
+        output = StringIO()
+        with patch('stockmarket.management.commands.run_paper_strategy.get_provider', return_value=stub), \
+                patch('stockmarket.paper_trading.get_provider', return_value=stub):
+            call_command('run_paper_strategy', '--account', str(self.account.id), '--symbol', '000001',
+                         '--short', '3', '--long', '5', *extra, stdout=output)
+        return output.getvalue()
+
+    def test_bullish_signal_buys_board_lots_with_allocation(self) -> None:
+        output = self._run([10, 10, 10, 10, 10, 11, 12, 13])
+
+        position = SimulationPosition.objects.get(account=self.account, symbol='000001')
+        self.assertEqual(position.quantity, Decimal('7300'))  # 95000 / 13 = 7307 -> 整手 7300
+        self.assertIn('BUY 000001 x 7300 -> FILLED', output)
+
+    def test_dry_run_does_not_place_orders(self) -> None:
+        output = self._run([10, 10, 10, 10, 10, 11, 12, 13], '--dry-run')
+        self.assertIn('[dry-run]', output)
+        self.assertFalse(SimulationOrder.objects.exists())
+
+    def test_bearish_signal_sells_existing_position(self) -> None:
+        SimulationPosition.objects.create(account=self.account, symbol='000001', quantity=500, average_price=12)
+        output = self._run([13, 13, 13, 13, 13, 12, 11, 10])
+        self.assertIn('SELL 000001 x 500 -> FILLED', output)
+        self.assertFalse(SimulationPosition.objects.filter(account=self.account).exists())
+
+    def test_live_account_requires_explicit_flag(self) -> None:
+        self.account.trading_mode = 'LIVE'
+        self.account.broker = 'FUTU'
+        self.account.save()
+        with self.assertRaisesRegex(CommandError, 'allow-live'):
+            self._run([10, 10, 10, 10, 10, 11, 12, 13])
+
+
+class CheckBrokerCommandTests(TestCase):
+    def test_reports_accounts_and_assets_without_placing_orders(self) -> None:
+        output = StringIO()
+        with patch('stockmarket.management.commands.check_broker.adapter_class', return_value=FakeBroker), \
+                patch.object(FakeBroker, 'list_accounts', return_value=[{'acc_id': '123', 'trd_env': 'SIMULATE'}]):
+            call_command('check_broker', '--broker', 'FUTU', '--market', 'US', stdout=output)
+        text = output.getvalue()
+        self.assertIn('acc_id=123', text)
+        self.assertIn('总资产 6505', text)
+        self.assertIn('AAPL', text)
+        self.assertFalse(SimulationAccount.objects.exists())
+
+    def test_unreachable_broker_is_a_command_error(self) -> None:
+        with patch('stockmarket.management.commands.check_broker.adapter_class', return_value=FakeBroker), \
+                patch.object(FakeBroker, 'get_account', side_effect=BrokerError('OpenD 未启动')):
+            with self.assertRaisesRegex(CommandError, 'OpenD'):
+                call_command('check_broker', '--broker', 'FUTU', '--market', 'US', stdout=StringIO())
+
+
 class BrokerSymbolMappingTests(SimpleTestCase):
     def test_futu_symbols(self) -> None:
         self.assertEqual(to_futu_symbol('A', '600519'), 'SH.600519')
