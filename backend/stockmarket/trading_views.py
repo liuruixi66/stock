@@ -153,7 +153,7 @@ def _order_data(item: SimulationOrder) -> dict:
         'symbol': item.symbol,
         'side': item.side,
         'order_type': item.order_type,
-        'quantity': item.quantity,
+        'quantity': float(item.quantity),
         'filled_quantity': float(item.filled_quantity),
         'requested_price': float(item.requested_price) if item.requested_price is not None else None,
         'executed_price': float(item.executed_price) if item.executed_price is not None else None,
