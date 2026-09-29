@@ -3,26 +3,36 @@
     <div class="page-header">
       <div>
         <h1>分析报告</h1>
-        <p class="subtitle">模拟盘绩效与量化研究成果的统一复盘视图。</p>
+        <p class="subtitle">内置模拟盘与券商账户（模拟 / 实盘）绩效与量化研究成果的统一复盘视图。</p>
       </div>
       <div class="header-actions">
-        <select v-model.number="accountId" @change="loadAll">
+        <select v-model.number="accountId" @change="switchAccount">
           <option v-for="item in accounts" :key="item.id" :value="item.id">
-            {{ item.name }}（{{ item.market === 'A' ? 'A股' : item.market === 'US' ? '美股' : '虚拟货币' }}）
+            {{ item.name }}（{{ marketLabel(item.market) }} · {{ item.broker_label }}{{ item.trading_mode === 'LIVE' ? ' · 实盘' : '' }}）
           </option>
         </select>
+        <button v-if="selectedAccount?.is_external" class="ghost-btn" :disabled="syncing" @click="syncAndReload">{{ syncing ? '同步中' : '同步券商' }}</button>
         <button class="ghost-btn" :disabled="loading" @click="loadAll">{{ loading ? '加载中' : '刷新' }}</button>
         <RouterLink class="ghost-btn" to="/transaction-details">查看逐笔记录</RouterLink>
       </div>
     </div>
 
     <p v-if="error" class="error-banner">{{ error }}</p>
+    <p v-if="syncError" class="error-banner warn">券商同步失败，以下为最近一次同步的本地数据：{{ syncError }}</p>
 
     <div v-if="!accounts.length" class="empty-card">
-      还没有模拟账户，先到量化研究交易台创建一个并提交订单。
+      还没有账户，先到量化研究交易台创建一个（内置模拟或券商模拟盘）并提交订单。
     </div>
 
     <template v-else>
+      <div v-if="selectedAccount" class="account-meta">
+        <span :class="['mode-tag', selectedAccount.trading_mode.toLowerCase()]">{{ selectedAccount.trading_mode === 'LIVE' ? '实盘' : '模拟盘' }}</span>
+        <span>{{ selectedAccount.broker_label }}</span>
+        <span v-if="selectedAccount.broker_account_id">券商账号 {{ selectedAccount.broker_account_id }}</span>
+        <span v-if="selectedAccount.is_external">最近同步 {{ selectedAccount.last_synced_at ? formatTime(selectedAccount.last_synced_at) : '--' }}</span>
+        <span v-else>本地即时撮合</span>
+      </div>
+
       <section class="metrics-panel">
         <h2>账户绩效</h2>
         <div class="metrics-grid">
@@ -100,7 +110,11 @@ import { RouterLink } from 'vue-router'
 import * as echarts from 'echarts'
 import { paperTradingApi, researchApi } from '@/api/stock'
 
-interface PaperAccount { id: number; name: string; market: 'A' | 'US' | 'CRYPTO' }
+interface PaperAccount {
+  id: number; name: string; market: 'A' | 'US' | 'CRYPTO'
+  broker: string; broker_label: string; broker_account_id: string
+  trading_mode: 'PAPER' | 'LIVE'; is_external: boolean; last_synced_at: string | null
+}
 
 const accounts = ref<PaperAccount[]>([])
 const accountId = ref<number>()
@@ -110,7 +124,10 @@ const positions = ref<any[]>([])
 const realizedCurve = ref<any[]>([])
 const runs = ref<any[]>([])
 const loading = ref(false)
+const syncing = ref(false)
 const error = ref('')
+const syncError = ref('')
+const selectedAccount = computed(() => accounts.value.find((item) => item.id === accountId.value))
 
 const pnlChartElement = ref<HTMLElement>()
 const holdingChartElement = ref<HTMLElement>()
@@ -145,6 +162,9 @@ function toneOf(value: number) {
 function pnlClass(value: number) {
   return toneOf(value)
 }
+function marketLabel(market: PaperAccount['market']) {
+  return market === 'A' ? 'A股' : market === 'US' ? '美股' : '虚拟货币'
+}
 function formatTime(value: string) {
   return new Date(value).toLocaleString('zh-CN', { hour12: false })
 }
@@ -178,6 +198,10 @@ function drawCharts() {
   }
 }
 
+async function loadAccounts(keepId?: number) {
+  accounts.value = (await paperTradingApi.getAccounts()).data.data
+  accountId.value = accounts.value.find((item) => item.id === keepId)?.id ?? accounts.value[0]?.id
+}
 async function loadAll() {
   if (!accountId.value) return
   loading.value = true
@@ -201,6 +225,25 @@ async function loadAll() {
     loading.value = false
   }
 }
+async function syncAndReload() {
+  if (!accountId.value) return
+  syncing.value = true
+  syncError.value = ''
+  try {
+    await paperTradingApi.syncAccount(accountId.value)
+    await loadAccounts(accountId.value)
+  } catch (value: any) {
+    syncError.value = value?.response?.data?.error || value?.message || '同步失败'
+  } finally {
+    syncing.value = false
+  }
+  await loadAll()
+}
+async function switchAccount() {
+  syncError.value = ''
+  if (selectedAccount.value?.is_external) await syncAndReload()
+  else await loadAll()
+}
 
 function resizeCharts() {
   pnlChart?.resize()
@@ -210,9 +253,8 @@ function resizeCharts() {
 onMounted(async () => {
   window.addEventListener('resize', resizeCharts)
   try {
-    accounts.value = (await paperTradingApi.getAccounts()).data.data
-    accountId.value = accounts.value[0]?.id
-    await loadAll()
+    await loadAccounts()
+    await switchAccount()
   } catch (value: any) {
     error.value = value?.response?.data?.error || '账户加载失败'
   }
@@ -273,6 +315,21 @@ onUnmounted(() => {
   background: #fff0ed;
   border-left: 3px solid #b42318;
 }
+
+.error-banner.warn { background: #fff7e6; border-left-color: #9a6b00; }
+
+.account-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: #6a7a76;
+}
+
+.mode-tag { padding: 2px 8px; font-size: 12px; background: #e7f5f1; color: #087a65; }
+.mode-tag.live { background: #fdeceb; color: #b42318; }
 
 .metrics-panel,
 .chart-panel {
