@@ -316,19 +316,19 @@ function drawChart() {
   chart ||= echarts.init(chartElement.value)
   chart.setOption({ grid: { left: 56, right: 20, top: 24, bottom: 38 }, tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: backtest.value.equity_curve.map((item: any) => item.date), axisLabel: { color: '#718096' } }, yAxis: { type: 'value', scale: true, axisLabel: { color: '#718096' }, splitLine: { lineStyle: { color: '#e8edf2' } } }, series: [{ type: 'line', showSymbol: false, smooth: true, data: backtest.value.equity_curve.map((item: any) => item.equity), lineStyle: { color: '#006d5b', width: 2 }, areaStyle: { color: 'rgba(0,109,91,.09)' } }] })
 }
-async function loadAccounts() { accounts.value = (await paperTradingApi.getAccounts()).data.data; syncMarketAccounts() }
-function syncMarketAccounts() {
+async function loadAccounts(preferredId?: number) { accounts.value = (await paperTradingApi.getAccounts()).data.data; syncMarketAccounts(preferredId) }
+function syncMarketAccounts(preferredId?: number) {
   marketAccounts.value = accounts.value.filter((item: PaperAccount) => item.market === market.value)
-  selectedAccountId.value = marketAccounts.value[0]?.id
+  selectedAccountId.value = marketAccounts.value.find((item) => item.id === preferredId)?.id ?? marketAccounts.value[0]?.id
   summary.value = undefined
   if (selectedAccountId.value) loadAccount()
 }
 async function createAccount() {
   creatingAccount.value = true; error.value = ''
   try {
-    await paperTradingApi.createAccount({ name: newAccountName.value, market: market.value, initial_cash: 100000, ...newAccount })
+    const { data } = await paperTradingApi.createAccount({ name: newAccountName.value, market: market.value, initial_cash: 100000, ...newAccount })
     newAccount.broker_account_id = ''
-    await loadAccounts()
+    await loadAccounts(data.data.id)
   } catch (value) { showError(value) }
   finally { creatingAccount.value = false }
 }
@@ -340,7 +340,7 @@ async function loadAccount() {
 async function syncAccount() {
   if (!selectedAccountId.value) return
   syncing.value = true; error.value = ''
-  try { await paperTradingApi.syncAccount(selectedAccountId.value); await loadAccounts() }
+  try { await paperTradingApi.syncAccount(selectedAccountId.value); await loadAccounts(selectedAccountId.value) }
   catch (value) { showError(value) }
   finally { syncing.value = false }
 }
