@@ -5,11 +5,12 @@ from decimal import Decimal, InvalidOperation
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
+from brokers import BrokerError, broker_catalog
 from market_data import MarketDataError, get_provider
 from market_data.local_history import LocalHistoryProvider, RESEARCH_START, available_end
 from .analytics import build_account_analytics
 from .models import ResearchRun, SimulationAccount, SimulationOrder, WatchlistItem
-from .paper_trading import TradingError, create_account, submit_order
+from .paper_trading import TradingError, cancel_order, create_account, live_trading_enabled, submit_order, sync_account
 from .quant_research import ResearchError, run_leaky_integrator_experiment, run_portfolio_baseline, run_sma_cross
 
 
@@ -21,6 +22,12 @@ def _account_data(account: SimulationAccount) -> dict:
         'currency': account.currency,
         'initial_cash': float(account.initial_cash),
         'cash': float(account.cash),
+        'broker': account.broker,
+        'broker_label': account.get_broker_display(),
+        'broker_account_id': account.broker_account_id,
+        'trading_mode': account.trading_mode,
+        'is_external': account.is_external,
+        'last_synced_at': account.last_synced_at.isoformat() if account.last_synced_at else None,
     }
 
 
@@ -106,10 +113,58 @@ def accounts(request):
             data.get('name', '').strip(),
             data.get('market', 'A'),
             Decimal(str(data.get('initial_cash', 100000))),
+            broker=str(data.get('broker', 'SIM')),
+            broker_account_id=str(data.get('broker_account_id', '') or ''),
+            trading_mode=str(data.get('trading_mode', 'PAPER')),
         )
         return JsonResponse({'success': True, 'data': _account_data(account)}, status=201)
     except (ValueError, InvalidOperation, TradingError) as exc:
         return JsonResponse({'success': False, 'error': str(exc)}, status=400)
+
+
+def brokers(request):
+    """列出可用券商通道及其 SDK/环境变量要求，供前端建账时选择。"""
+    return JsonResponse({'success': True, 'data': {
+        'brokers': broker_catalog(),
+        'live_trading_enabled': live_trading_enabled(),
+    }})
+
+
+@csrf_exempt
+def account_sync(request, account_id: int):
+    """从券商拉取资金、持仓和未完成委托，内置模拟账户直接返回。"""
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
+    try:
+        account = SimulationAccount.objects.get(pk=account_id)
+    except SimulationAccount.DoesNotExist:
+        return JsonResponse({'success': False, 'error': '账户不存在'}, status=404)
+    try:
+        sync_account(account)
+    except BrokerError as exc:
+        return JsonResponse({'success': False, 'error': str(exc)}, status=502)
+    return JsonResponse({'success': True, 'data': _account_data(account)})
+
+
+def _order_data(item: SimulationOrder) -> dict:
+    return {
+        'id': item.id,
+        'account_id': item.account_id,
+        'symbol': item.symbol,
+        'side': item.side,
+        'order_type': item.order_type,
+        'quantity': item.quantity,
+        'filled_quantity': float(item.filled_quantity),
+        'requested_price': float(item.requested_price) if item.requested_price is not None else None,
+        'executed_price': float(item.executed_price) if item.executed_price is not None else None,
+        'amount': float(item.executed_price * item.quantity) if item.executed_price is not None else None,
+        'commission': float(item.commission),
+        'tax': float(item.tax),
+        'status': item.status,
+        'broker_order_id': item.broker_order_id,
+        'message': item.message,
+        'created_at': item.created_at.isoformat(),
+    }
 
 
 @csrf_exempt
@@ -118,23 +173,7 @@ def orders(request):
         queryset = SimulationOrder.objects.select_related('account')
         if request.GET.get('account_id'):
             queryset = queryset.filter(account_id=request.GET['account_id'])
-        data = [{
-            'id': item.id,
-            'account_id': item.account_id,
-            'symbol': item.symbol,
-            'side': item.side,
-            'order_type': item.order_type,
-            'quantity': item.quantity,
-            'requested_price': float(item.requested_price) if item.requested_price is not None else None,
-            'executed_price': float(item.executed_price) if item.executed_price is not None else None,
-            'amount': float(item.executed_price * item.quantity) if item.executed_price is not None else None,
-            'commission': float(item.commission),
-            'tax': float(item.tax),
-            'status': item.status,
-            'message': item.message,
-            'created_at': item.created_at.isoformat(),
-        } for item in queryset[:200]]
-        return JsonResponse({'success': True, 'data': data})
+        return JsonResponse({'success': True, 'data': [_order_data(item) for item in queryset[:200]]})
     if request.method != 'POST':
         return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
     try:
@@ -147,17 +186,36 @@ def orders(request):
             order_type=data.get('order_type', 'MARKET'),
             requested_price=Decimal(str(data['price'])) if data.get('price') is not None else None,
         )
-        return JsonResponse({'success': order.status != 'REJECTED', 'data': {'id': order.id, 'status': order.status, 'message': order.message}}, status=201)
+        return JsonResponse({'success': order.status != 'REJECTED', 'data': _order_data(order)}, status=201)
     except (KeyError, ValueError, InvalidOperation, TradingError, SimulationAccount.DoesNotExist) as exc:
         return JsonResponse({'success': False, 'error': str(exc)}, status=400)
 
 
+@csrf_exempt
+def order_cancel(request, order_id: int):
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
+    try:
+        order = cancel_order(order_id)
+    except SimulationOrder.DoesNotExist:
+        return JsonResponse({'success': False, 'error': '订单不存在'}, status=404)
+    except TradingError as exc:
+        return JsonResponse({'success': False, 'error': str(exc)}, status=400)
+    return JsonResponse({'success': True, 'data': _order_data(order)})
+
+
 def account_summary(request, account_id: int):
-    """返回账户现金、实时持仓市值和总资产；单个行情失败时使用持仓均价。"""
+    """返回账户现金、实时持仓市值和总资产；券商账户先尝试同步，失败时返回本地缓存并附带错误。"""
     try:
         account = SimulationAccount.objects.get(pk=account_id)
     except SimulationAccount.DoesNotExist:
         return JsonResponse({'success': False, 'error': '账户不存在'}, status=404)
+    sync_error = None
+    if account.is_external:
+        try:
+            sync_account(account)
+        except BrokerError as exc:
+            sync_error = str(exc)
     positions = []
     market_value = Decimal('0')
     provider = get_provider(account.market)
@@ -182,8 +240,9 @@ def account_summary(request, account_id: int):
         **_account_data(account),
         'market_value': float(market_value),
         'total_assets': float(total_assets),
-        'total_return': float((total_assets / account.initial_cash - 1) * 100),
+        'total_return': float((total_assets / account.initial_cash - 1) * 100) if account.initial_cash else 0.0,
         'positions': positions,
+        'sync_error': sync_error,
     }})
 
 

@@ -1,4 +1,6 @@
 import json
+import os
+import sys
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from io import StringIO
@@ -11,11 +13,14 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
+from brokers import AccountSnapshot, BrokerAdapter, BrokerError, OrderResult, PositionSnapshot
+from brokers.futu_broker import FutuBroker, from_futu_symbol, to_futu_symbol
+from brokers.qmt_broker import from_qmt_symbol, to_qmt_symbol
 from market_data import HistoricalBar, Market, MarketDataError, MinuteBar, Quote
 from market_data.local_history import LocalHistoryProvider, download_history
 from .analytics import build_account_analytics
 from .models import SimulationAccount, SimulationOrder, SimulationPosition
-from .paper_trading import TradingError, submit_order
+from .paper_trading import TradingError, cancel_order, submit_order, sync_account
 from .quant_research import reconstruct_differenced_forecast, run_leaky_integrator_experiment, run_portfolio_baseline, run_sma_cross
 
 
@@ -170,6 +175,205 @@ class PaperTradingTests(TestCase):
         position = SimulationPosition.objects.get(account=account, symbol='BTCUSDT')
         self.assertEqual(order.status, 'FILLED')
         self.assertEqual(position.quantity, Decimal('0.25'))
+
+
+class FakeBroker(BrokerAdapter):
+    """记录调用并返回预设结果的假券商，用于验证路由与本地账本隔离。"""
+
+    code = 'FAKE'
+    label = 'Fake'
+    markets = frozenset({'A', 'US'})
+    supports_live = True
+    calls: list[tuple] = []
+    place_result = OrderResult(status='SUBMITTED', broker_order_id='B-1', message='accepted')
+    order_result = OrderResult(status='FILLED', broker_order_id='B-1', filled_quantity=Decimal('10'),
+                               executed_price=Decimal('150.5'), message='done')
+    snapshot = AccountSnapshot(cash=Decimal('5000'), market_value=Decimal('1505'), total_assets=Decimal('6505'), currency='USD')
+    positions = [PositionSnapshot(symbol='AAPL', quantity=Decimal('10'), average_price=Decimal('150.5'))]
+
+    def place_order(self, order):
+        FakeBroker.calls.append(('place', order.symbol, order.side, order.quantity, self.account.trading_mode))
+        return self.place_result
+
+    def cancel_order(self, order):
+        FakeBroker.calls.append(('cancel', order.broker_order_id))
+        return OrderResult(status='CANCELLED', broker_order_id=order.broker_order_id, message='cancelled')
+
+    def get_order(self, order):
+        FakeBroker.calls.append(('get_order', order.broker_order_id))
+        return self.order_result
+
+    def get_account(self):
+        return self.snapshot
+
+    def get_positions(self):
+        return list(self.positions)
+
+
+class ExternalBrokerRoutingTests(TestCase):
+    def setUp(self) -> None:
+        FakeBroker.calls = []
+        self.account = SimulationAccount.objects.create(
+            name='富途美股模拟', market='US', currency='USD', broker='FUTU', broker_account_id='123',
+            initial_cash=Decimal('6505'), cash=Decimal('6505'),
+        )
+        patcher = patch('stockmarket.paper_trading.get_broker', side_effect=lambda account: FakeBroker(account))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_external_order_is_forwarded_and_ledger_untouched(self) -> None:
+        order = submit_order(self.account.id, 'aapl', 'BUY', Decimal('10'))
+
+        self.account.refresh_from_db()
+        self.assertEqual(order.status, 'SUBMITTED')
+        self.assertEqual(order.broker_order_id, 'B-1')
+        self.assertEqual(self.account.cash, Decimal('6505'))
+        self.assertFalse(SimulationPosition.objects.filter(account=self.account).exists())
+        self.assertEqual(FakeBroker.calls, [('place', 'AAPL', 'BUY', Decimal('10'), 'PAPER')])
+
+    def test_external_us_order_rejects_fractional_shares(self) -> None:
+        with self.assertRaises(TradingError):
+            submit_order(self.account.id, 'AAPL', 'BUY', Decimal('0.5'))
+        self.assertEqual(FakeBroker.calls, [])
+
+    def test_broker_error_becomes_rejected_order(self) -> None:
+        with patch.object(FakeBroker, 'place_order', side_effect=BrokerError('OpenD 未启动')):
+            order = submit_order(self.account.id, 'AAPL', 'BUY', Decimal('10'))
+        self.assertEqual(order.status, 'REJECTED')
+        self.assertIn('OpenD', order.message)
+
+    def test_live_mode_requires_global_switch(self) -> None:
+        self.account.trading_mode = 'LIVE'
+        self.account.save()
+        with patch.dict(os.environ, {'LIVE_TRADING_ENABLED': ''}):
+            with self.assertRaisesRegex(TradingError, 'LIVE_TRADING_ENABLED'):
+                submit_order(self.account.id, 'AAPL', 'BUY', Decimal('10'))
+        with patch.dict(os.environ, {'LIVE_TRADING_ENABLED': '1'}):
+            order = submit_order(self.account.id, 'AAPL', 'BUY', Decimal('10'))
+        self.assertEqual(order.status, 'SUBMITTED')
+        self.assertEqual(FakeBroker.calls[-1][-1], 'LIVE')
+
+    def test_sync_replaces_positions_and_finalizes_open_orders(self) -> None:
+        order = submit_order(self.account.id, 'AAPL', 'BUY', Decimal('10'))
+        SimulationPosition.objects.create(account=self.account, symbol='STALE', quantity=1, average_price=1)
+
+        sync_account(self.account)
+
+        order.refresh_from_db()
+        self.account.refresh_from_db()
+        self.assertEqual(order.status, 'FILLED')
+        self.assertEqual(order.filled_quantity, Decimal('10'))
+        self.assertEqual(order.executed_price, Decimal('150.5'))
+        self.assertEqual(self.account.cash, Decimal('5000'))
+        self.assertIsNotNone(self.account.last_synced_at)
+        self.assertEqual(
+            list(SimulationPosition.objects.filter(account=self.account).values_list('symbol', 'quantity')),
+            [('AAPL', Decimal('10'))],
+        )
+
+    def test_cancel_open_external_order(self) -> None:
+        order = submit_order(self.account.id, 'AAPL', 'BUY', Decimal('10'), 'LIMIT', Decimal('100'))
+        cancelled = cancel_order(order.id)
+        self.assertEqual(cancelled.status, 'CANCELLED')
+        self.assertIn(('cancel', 'B-1'), FakeBroker.calls)
+        with self.assertRaises(TradingError):
+            cancel_order(order.id)
+
+    def test_simulated_pending_limit_order_can_be_cancelled_locally(self) -> None:
+        sim = SimulationAccount.objects.create(
+            name='内置模拟', market='US', currency='USD', initial_cash=Decimal('1000'), cash=Decimal('1000'),
+        )
+        with patch('stockmarket.paper_trading.get_provider', return_value=FakeProvider()):
+            order = submit_order(sim.id, 'AAPL', 'BUY', Decimal('1'), 'LIMIT', Decimal('1'))
+        self.assertEqual(order.status, 'PENDING')
+        self.assertEqual(cancel_order(order.id).status, 'CANCELLED')
+        self.assertEqual(FakeBroker.calls, [])
+
+
+class BrokerAccountApiTests(TestCase):
+    def test_create_external_account_uses_broker_equity_as_baseline(self) -> None:
+        with patch('stockmarket.paper_trading.adapter_class', return_value=FakeBroker), \
+                patch('stockmarket.paper_trading.get_broker', side_effect=lambda account: FakeBroker(account)):
+            response = self.client.post(reverse('paper_accounts'), data=json.dumps({
+                'name': 'IB 模拟', 'market': 'US', 'broker': 'IB', 'broker_account_id': 'DU123', 'trading_mode': 'PAPER',
+            }), content_type='application/json')
+
+        self.assertEqual(response.status_code, 201, response.content)
+        payload = response.json()['data']
+        self.assertEqual(payload['broker'], 'IB')
+        self.assertTrue(payload['is_external'])
+        self.assertEqual(payload['initial_cash'], 6505.0)
+        self.assertEqual(payload['cash'], 5000.0)
+        self.assertEqual(SimulationPosition.objects.filter(account_id=payload['id']).count(), 1)
+
+    def test_create_external_account_fails_fast_when_broker_unreachable(self) -> None:
+        with patch('stockmarket.paper_trading.adapter_class', return_value=FakeBroker), \
+                patch.object(FakeBroker, 'get_account', side_effect=BrokerError('TWS 未启动')):
+            response = self.client.post(reverse('paper_accounts'), data=json.dumps({
+                'name': 'IB 模拟', 'market': 'US', 'broker': 'IB',
+            }), content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('TWS', response.json()['error'])
+        self.assertFalse(SimulationAccount.objects.exists())
+
+    def test_market_not_supported_by_broker_is_rejected(self) -> None:
+        response = self.client.post(reverse('paper_accounts'), data=json.dumps({
+            'name': 'QMT 美股', 'market': 'US', 'broker': 'QMT',
+        }), content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('不支持', response.json()['error'])
+
+    def test_simulated_account_defaults_are_unchanged(self) -> None:
+        response = self.client.post(reverse('paper_accounts'), data=json.dumps({
+            'name': 'A股研究账户', 'market': 'A', 'initial_cash': 100000,
+        }), content_type='application/json')
+        payload = response.json()['data']
+        self.assertEqual(payload['broker'], 'SIM')
+        self.assertFalse(payload['is_external'])
+        self.assertEqual(payload['trading_mode'], 'PAPER')
+
+    def test_brokers_endpoint_lists_catalog_without_importing_sdks(self) -> None:
+        response = self.client.get(reverse('paper_brokers'))
+        data = response.json()['data']
+        codes = [item['code'] for item in data['brokers']]
+        self.assertEqual(codes, ['SIM', 'FUTU', 'QMT', 'IB'])
+        futu = next(item for item in data['brokers'] if item['code'] == 'FUTU')
+        self.assertEqual(futu['markets'], ['A', 'US'])
+        self.assertIn('FUTU_OPEND_PORT', futu['env_vars'])
+        self.assertIsInstance(data['live_trading_enabled'], bool)
+
+    def test_summary_reports_sync_error_but_still_returns_cached_data(self) -> None:
+        account = SimulationAccount.objects.create(
+            name='富途', market='US', currency='USD', broker='FUTU', initial_cash=Decimal('100'), cash=Decimal('100'),
+        )
+        with patch('stockmarket.trading_views.sync_account', side_effect=BrokerError('OpenD 未连接')):
+            response = self.client.get(reverse('paper_account_summary', args=[account.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('OpenD', response.json()['data']['sync_error'])
+        self.assertEqual(response.json()['data']['cash'], 100.0)
+
+
+class BrokerSymbolMappingTests(SimpleTestCase):
+    def test_futu_symbols(self) -> None:
+        self.assertEqual(to_futu_symbol('A', '600519'), 'SH.600519')
+        self.assertEqual(to_futu_symbol('A', '000001'), 'SZ.000001')
+        self.assertEqual(to_futu_symbol('A', '430047'), 'BJ.430047')
+        self.assertEqual(to_futu_symbol('US', 'aapl'), 'US.AAPL')
+        self.assertEqual(to_futu_symbol('US', 'HK.00700'), 'HK.00700')
+        self.assertEqual(from_futu_symbol('US.AAPL'), 'AAPL')
+
+    def test_qmt_symbols(self) -> None:
+        self.assertEqual(to_qmt_symbol('600519'), '600519.SH')
+        self.assertEqual(to_qmt_symbol('510300'), '510300.SH')
+        self.assertEqual(to_qmt_symbol('159915'), '159915.SZ')
+        self.assertEqual(to_qmt_symbol('920001'), '920001.BJ')
+        self.assertEqual(from_qmt_symbol('000001.SZ'), '000001')
+
+    def test_missing_sdk_raises_actionable_error(self) -> None:
+        account = SimulationAccount(name='x', market='US', currency='USD', broker='FUTU', trading_mode='PAPER')
+        with patch.dict(sys.modules, {'futu': None}):
+            with self.assertRaisesRegex(BrokerError, 'pip install futu-api'):
+                FutuBroker(account).get_account()
 
 
 class MarketHistoryApiTests(TestCase):

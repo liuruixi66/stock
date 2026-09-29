@@ -25,3 +25,8 @@ drf-yasg>=1.21.0  # 可选，用于API文档生成
 
 # 开发工具（可选）
 python-dotenv>=1.0.0  # 环境变量管理
+
+# 券商接入（可选，按需安装；未安装时对应通道会在下单时提示）
+# futu-api>=9.0      # 富途 OpenD：A股/美股模拟盘，美股及A股通实盘（macOS/Windows/Linux）
+# ib_async>=1.0      # 盈透 IBKR：美股模拟/实盘，需要 TWS 或 IB Gateway
+# xtquant            # 迅投 miniQMT：A股券商模拟/实盘，仅 Windows
