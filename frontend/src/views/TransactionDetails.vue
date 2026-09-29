@@ -478,7 +478,7 @@ th:first-child, td:first-child, th:last-child, td:last-child { text-align: left;
 
 .positive { color: #b42318; }
 .negative { color: #087a65; }
-.memo { font-size: 12px; color: #6a7a76; }
+.memo { font-size: 12px; color: #6a7a76; white-space: normal; max-width: 260px; }
 
 .empty-card {
   margin-top: 20px;
