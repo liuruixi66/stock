@@ -121,6 +121,7 @@ class BigQuantExecutionTests(SimpleTestCase):
         self.context.user_store = Store()
         self.context.user_store.init_once(**{
             adapter.STATE_KEY: None, adapter.SIGNAL_KEY: '', adapter.ATTEMPT_KEY: '',
+            adapter.WEEK_KEY: '2024-32',
         })
         self.context.get_open_orders.return_value = []
         self.positions = {}
@@ -129,7 +130,6 @@ class BigQuantExecutionTests(SimpleTestCase):
         self.context.get_available_cash.return_value = 100000.0
         self.context.get_last_price.return_value = 10.0
         self.context.order.return_value = 0
-        self.context.rebalance_period.is_signal_date.return_value = False
         self.data = Mock()
         self.data.current_dt = datetime(2024, 8, 7, 15)
         self.data.current.return_value = 1000000.0
@@ -153,6 +153,18 @@ class BigQuantExecutionTests(SimpleTestCase):
         self.context.set_slippage_value.assert_called_with(
             slippage_type=2, slippage_value=0.002,
         )
+
+    def test_legacy_context_without_store_fails_before_setting_costs(self):
+        context = SimpleNamespace(set_commission=Mock(), set_slippage_value=Mock())
+        with self.assertRaisesRegex(RuntimeError, 'bigtraderv1 is not supported'):
+            adapter.initialize(context)
+        context.set_commission.assert_not_called()
+        self.assertFalse(hasattr(context, 'user_store'))
+
+    def test_nonpersistent_plain_dictionary_is_not_accepted(self):
+        context = SimpleNamespace(user_store={})
+        with self.assertRaisesRegex(RuntimeError, 'init_once is required'):
+            adapter.initialize(context)
 
     def test_reductions_must_fill_before_new_buys(self):
         self.hold()
@@ -291,18 +303,39 @@ class BigQuantExecutionTests(SimpleTestCase):
     def test_daily_signal_loads_only_current_completed_bar_date(self):
         frame, bars = fund_frame()
         self.data.current_dt = datetime.combine(bars[-1].date, datetime.min.time())
-        self.context.rebalance_period.is_signal_date.return_value = True
+        self.context.user_store[adapter.WEEK_KEY] = ''
         with patch.object(adapter, 'load_fund_history', return_value=frame) as load:
             adapter.handle_data(self.context, self.data)
             adapter.handle_data(self.context, self.data)
         load.assert_called_once_with(bars[-1].date)
-        self.context.rebalance_period.is_signal_date.assert_called_with(bars[-1].date)
         self.assertEqual(self.context.order.call_count, 1)
+
+    def test_week_schedule_survives_daily_restart_and_holiday_monday(self):
+        frame, bars = fund_frame()
+        first_day = bars[-1].date
+        self.context.user_store[adapter.WEEK_KEY] = ''
+        self.data.current_dt = datetime.combine(first_day, datetime.min.time())
+        with patch.object(adapter, 'load_fund_history', return_value=frame) as load:
+            adapter.handle_data(self.context, self.data)
+            self.positions['510300.SH'] = SimpleNamespace(
+                current_qty=3900, avail_qty=3900, market_value=39000.0,
+            )
+            self.data.current_dt += timedelta(days=1)
+            with patch.object(adapter, 'import_module', return_value=Mock()):
+                adapter.initialize(self.context)
+            adapter.handle_data(self.context, self.data)
+        self.assertEqual(load.call_count, 1)
+        # A Tuesday first callback after a holiday is a valid new-week signal.
+        self.data.current_dt = datetime(2024, 8, 13, 15)
+        with patch.object(adapter, 'load_fund_history', side_effect=ValueError('probe')) as load:
+            with self.assertRaisesRegex(ValueError, 'probe'):
+                adapter.handle_data(self.context, self.data)
+        load.assert_called_once_with(date(2024, 8, 13))
 
     def test_held_missing_data_is_error_not_liquidation(self):
         frame, bars = fund_frame()
         self.hold('510500.SH')
-        self.context.rebalance_period.is_signal_date.return_value = True
+        self.context.user_store[adapter.WEEK_KEY] = ''
         self.data.current_dt = datetime.combine(bars[-1].date, datetime.min.time())
         with patch.object(adapter, 'load_fund_history', return_value=frame):
             with self.assertRaisesRegex(ValueError, 'Held ETF data unavailable'):
@@ -329,16 +362,18 @@ class BigQuantExportTests(SimpleTestCase):
         modules = Mock()
         with patch.object(adapter, 'import_module', return_value=modules):
             adapter.run_backtest('2024-01-01', '2024-08-01', 100000)
-        kwargs = modules.M.bigtrader.v30.call_args.kwargs
-        self.assertEqual(kwargs['data']['market'], 'cn_fund')
-        self.assertEqual(kwargs['data']['instruments'], list(adapter.ETF_UNIVERSE))
-        self.assertEqual(kwargs['product_type'], '基金')
-        self.assertEqual(kwargs['frequency'], 'daily')
-        self.assertEqual(kwargs['rebalance_period_type'], '周度交易日')
-        self.assertEqual(kwargs['rebalance_period_days'], '1')
+        modules.run.assert_called_once()
+        kwargs = modules.run.call_args.kwargs
+        self.assertEqual(kwargs['market'], modules.Market.CN_FUND)
+        self.assertEqual(kwargs['instruments'], list(adapter.ETF_UNIVERSE))
+        self.assertEqual(kwargs['frequency'], modules.Frequency.DAILY)
         self.assertEqual(kwargs['order_price_field_buy'], 'open')
         self.assertEqual(kwargs['order_price_field_sell'], 'open')
-        self.assertEqual(kwargs['before_start_days'], 250)
+        self.assertEqual(kwargs['start_date'], '2024-01-01')
+        self.assertEqual(kwargs['end_date'], '2024-08-01')
+        self.assertEqual(kwargs['benchmark'], '000300.SH')
+        self.assertNotIn('rebalance_period_type', kwargs)
+        modules.M.bigtrader.v30.assert_not_called()
 
     def test_runner_rejects_future_dates_and_nonfinite_capital(self):
         with self.assertRaises(ValueError):

@@ -185,6 +185,7 @@ REBALANCE_THRESHOLD = 0.03
 STATE_KEY = 'etf_rotation_pending_v1'
 SIGNAL_KEY = 'etf_rotation_signal_date_v1'
 ATTEMPT_KEY = 'etf_rotation_attempt_date_v1'
+WEEK_KEY = 'etf_rotation_signal_week_v1'
 
 
 class Position(Protocol):
@@ -204,14 +205,9 @@ class UserStore(Protocol):
     def __setitem__(self, key: str, value: object) -> None: ...
 
 
-class RebalancePeriod(Protocol):
-    def is_signal_date(self, day: date) -> bool: ...
-
-
 class BigQuantContext(Protocol):
     user_store: UserStore
     logger: Logger
-    rebalance_period: RebalancePeriod
 
     def get_positions(self) -> Mapping[str, Position]: ...
     def get_open_orders(self): ...
@@ -225,12 +221,22 @@ class BigQuantContext(Protocol):
 
 
 def initialize(context: BigQuantContext) -> None:
+    if not hasattr(context, 'user_store'):
+        raise RuntimeError(
+            'This strategy requires bigquant.bigtrader.run and its persistent user_store; '
+            'M.bigtrader.v30 / bigtraderv1 is not supported. Do not substitute an '
+            'in-memory dictionary for paper trading persistence.'
+        )
+    if not callable(getattr(context.user_store, 'init_once', None)):
+        raise RuntimeError('BigTrader user_store.init_once is required for daily persistence')
     bigtrader = import_module('bigquant.bigtrader')
     context.set_commission(
         bigtrader.PerOrder(buy_cost=0.0003, sell_cost=0.0003, min_cost=5, tax_ratio=0),
     )
     context.set_slippage_value(slippage_type=2, slippage_value=0.002)
-    context.user_store.init_once(**{STATE_KEY: None, SIGNAL_KEY: '', ATTEMPT_KEY: ''})
+    context.user_store.init_once(**{
+        STATE_KEY: None, SIGNAL_KEY: '', ATTEMPT_KEY: '', WEEK_KEY: '',
+    })
     context.logger.info('ETF research V1: daily signals, next-bar execution; paper use only')
 
 
@@ -318,13 +324,14 @@ def targets_from_fund_frame(
 def handle_data(context: BigQuantContext, data) -> None:
     signal_day = data.current_dt.date()
     day_text = signal_day.isoformat()
+    iso_year, iso_week, _ = signal_day.isocalendar()
+    week_text = '{}-{:02d}'.format(iso_year, iso_week)
     if context.get_open_orders():
         context.logger.warning('Outstanding orders; defer ETF rebalance')
         return
     if context.user_store[ATTEMPT_KEY] == day_text:
         return
-    if (context.rebalance_period.is_signal_date(signal_day)
-            and context.user_store[SIGNAL_KEY] != day_text):
+    if context.user_store[WEEK_KEY] != week_text:
         result = targets_from_fund_frame(load_fund_history(signal_day), signal_day)
         held = {symbol for symbol, position in context.get_positions().items()
                 if position.current_qty > 0}
@@ -341,6 +348,7 @@ def handle_data(context: BigQuantContext, data) -> None:
             'signal_date': day_text, 'weights': result['weights'],
         }
         context.user_store[SIGNAL_KEY] = day_text
+        context.user_store[WEEK_KEY] = week_text
     pending = context.user_store[STATE_KEY]
     if pending is None:
         return
@@ -463,17 +471,14 @@ def run_backtest(start_date='2024-01-01', end_date=None, capital_base=100000):
         raise ValueError('Require start_date <= end_date < today')
     if not isfinite(capital_base) or capital_base <= 0:
         raise ValueError('capital_base must be positive and finite')
-    modules = import_module('bigmodule')
-    return modules.M.bigtrader.v30(
-        data={'start_date': start_date, 'end_date': end_date,
-              'market': 'cn_fund', 'instruments': list(ETF_UNIVERSE)},
-        start_date='', end_date='', initialize=initialize, handle_data=handle_data,
-        capital_base=capital_base, frequency='daily', product_type='基金',
-        rebalance_period_type='周度交易日', rebalance_period_days='1',
-        rebalance_period_roll_forward=True, backtest_engine_mode='标准模式',
-        before_start_days=250, volume_limit=0.025,
+    bigtrader = import_module('bigquant.bigtrader')
+    return bigtrader.run(
+        market=bigtrader.Market.CN_FUND, frequency=bigtrader.Frequency.DAILY,
+        start_date=start_date, end_date=end_date, instruments=list(ETF_UNIVERSE),
+        initialize=initialize, handle_data=handle_data,
+        capital_base=capital_base, volume_limit=0.025,
         order_price_field_buy='open', order_price_field_sell='open',
-        benchmark='沪深300指数', plot_charts=True,
+        benchmark='000300.SH',
     )
 
 
