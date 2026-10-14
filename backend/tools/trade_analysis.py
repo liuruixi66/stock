@@ -6,6 +6,7 @@
 import json
 import pandas as pd
 from datetime import datetime
+from config.paths import CACHE_DIR
 
 def analyze_trades():
     """读取固定的回测缓存并打印交易、现金流和等权重再平衡诊断。
@@ -15,7 +16,7 @@ def analyze_trades():
     """
     
     # 加载数据
-    with open('/home/liu/桌面/stock-20250730_update./backend/cache/earnings_overview_latest_equal_weight.json', 'r', encoding='utf-8') as f:
+    with open(CACHE_DIR / 'earnings_overview_latest_equal_weight.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
     
     trades = data.get('trades', [])

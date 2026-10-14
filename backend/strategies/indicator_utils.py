@@ -78,4 +78,4 @@ def calculate_kdj(high, low, close, n=9):
         'j': j_values
     }
 
-# strategies.indicator_utils.py 只负责数据分割和周期转换，具体指标计算请在 indicators/ 下实现
+# indicator_utils.py 只负责数据分割和周期转换，具体指标计算请在 indicators/ 下实现

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from collections import deque
+from collections import defaultdict, deque
 from decimal import Decimal
 
-from market_data import MarketDataError
-from market_data import get_provider
+from market_data import MarketDataError, get_provider
 
 from stockmarket.models import SimulationAccount
 from stockmarket.models import SimulationOrder

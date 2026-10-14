@@ -11,10 +11,9 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 import os
-from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+from .paths import BASE_DIR
 
 # 券商连接信息等敏感配置从 backend/.env 读取（参考 .env.example），不写入代码仓库。
 try:

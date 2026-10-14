@@ -140,7 +140,7 @@ def main():
         print('所有字段比较结果（筛选后）:')
         print(df_filtered[[col for col in compare_results.keys() if col in df_filtered.columns]])
     
-    log_path = '/home/liu/桌面/stock-main/backend/filter_stocks_result.log'
+    log_path = BASE_DIR / 'filter_stocks_result.log'
     df_filtered.to_csv(log_path, index=False, encoding='utf-8')
     print(f'筛选结果已保存到: {log_path}')
 

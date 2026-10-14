@@ -1,10 +1,7 @@
 import json
 import os
 import sys
-from datetime import date
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
@@ -13,27 +10,14 @@ from unittest.mock import patch
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import SimpleTestCase
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
-from brokers import AccountSnapshot
-from brokers import BrokerAdapter
-from brokers import BrokerError
-from brokers import OrderResult
-from brokers import PositionSnapshot
-from brokers.futu_broker import FutuBroker
-from brokers.futu_broker import from_futu_symbol
-from brokers.futu_broker import to_futu_symbol
-from brokers.qmt_broker import from_qmt_symbol
-from brokers.qmt_broker import to_qmt_symbol
-from market_data import HistoricalBar
-from market_data import Market
-from market_data import MarketDataError
-from market_data import MinuteBar
-from market_data import Quote
-from market_data.local_history import LocalHistoryProvider
-from market_data.local_history import download_history
+from brokers import AccountSnapshot, BrokerAdapter, BrokerError, OrderResult, PositionSnapshot
+from brokers.futu_broker import FutuBroker, from_futu_symbol, to_futu_symbol
+from brokers.qmt_broker import from_qmt_symbol, to_qmt_symbol
+from market_data import HistoricalBar, Market, MarketDataError, MinuteBar, Quote
+from market_data.local_history import LocalHistoryProvider, download_history
 from research.analytics import build_account_analytics
 from stockmarket.models import SimulationAccount
 from stockmarket.models import SimulationOrder

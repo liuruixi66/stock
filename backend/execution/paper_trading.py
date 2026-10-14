@@ -1,19 +1,11 @@
 import os
-from decimal import Decimal
-from decimal import ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
 from django.utils import timezone
 
-from brokers import OPEN_STATUSES
-from brokers import BrokerError
-from brokers import OrderResult
-from brokers import adapter_class
-from brokers import get_broker
-from brokers import is_external
-from market_data import Market
-from market_data import MarketDataError
-from market_data import get_provider
+from brokers import OPEN_STATUSES, BrokerError, OrderResult, adapter_class, get_broker, is_external
+from market_data import Market, MarketDataError, get_provider
 from stockmarket.models import SimulationAccount
 from stockmarket.models import SimulationOrder
 from stockmarket.models import SimulationPosition

@@ -1,6 +1,6 @@
 from django.urls import path
 from api import trading_views
-import api.cache_views as api.cache_views
+import api.cache_views as cache_views
 
 urlpatterns = [
     path('api/market/quotes/', trading_views.market_quotes, name='market_quotes'),
@@ -20,6 +20,6 @@ urlpatterns = [
     path('api/research/runs/<int:run_id>/', trading_views.research_run_detail, name='research_run_detail'),
     path('api/watchlist/', trading_views.watchlist, name='watchlist'),
     path('api/watchlist/<int:item_id>/', trading_views.watchlist_item, name='watchlist_item'),
-    path('api/cache/backtest-details/', api.cache_views.get_backtest_details_cache, name='cache_backtest_details'),
-    path('api/cache/status/', api.cache_views.get_cache_status, name='cache_status'),
+    path('api/cache/backtest-details/', cache_views.get_backtest_details_cache, name='cache_backtest_details'),
+    path('api/cache/status/', cache_views.get_cache_status, name='cache_status'),
 ]

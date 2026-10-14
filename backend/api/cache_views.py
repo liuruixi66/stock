@@ -12,10 +12,11 @@ from datetime import datetime
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from config.paths import CACHE_DIR
 
 def get_cache_dir():
-    """返回与当前模块同级的后端 JSON 缓存目录。"""
-    return os.path.join(os.path.dirname(__file__), 'cache')
+    """返回后端 JSON 缓存目录，不依赖视图模块所在位置。"""
+    return str(CACHE_DIR)
 
 def find_latest_cache_file(pattern_list):
     """按模式优先级查找文件，并在同一模式下返回修改时间最新者。"""

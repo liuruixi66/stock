@@ -4,11 +4,7 @@
 """
 import pandas as pd
 import numpy as np
-from typing import Optional
-from typing import Dict
-from typing import Any
-from typing import List
-from typing import Tuple
+from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 import json
 
@@ -35,11 +31,7 @@ SIGNAL_CODES = {
 
 # 导入技术指标
 try:
-    from indicators import ma
-    from indicators import dif
-    from indicators import dea
-    from indicators import macd
-    from indicators import kdj
+    from indicators import ma, dif, dea, macd, kdj
 except ImportError:
     import indicators.ma as ma
     import indicators.dif as dif
@@ -629,20 +621,20 @@ class SignalLibrary:
             print(f"导入信号历史记录失败: {e}")
 
 # 全局信号库实例
-strategies.signal_library = SignalLibrary()
+signal_library = SignalLibrary()
 
 # 便捷函数
 def generate_buy_signal(stock_code: str, df: pd.DataFrame, signal_type: str = 'basic', **kwargs) -> pd.Series:
     """生成买入信号的便捷函数"""
-    return strategies.signal_library.generate_buy_signal(stock_code, df, signal_type, **kwargs)
+    return signal_library.generate_buy_signal(stock_code, df, signal_type, **kwargs)
 
 def generate_sell_signal(stock_code: str, df: pd.DataFrame, signal_type: str = 'basic', **kwargs) -> pd.Series:
     """生成卖出信号的便捷函数"""
-    return strategies.signal_library.generate_sell_signal(stock_code, df, signal_type, **kwargs)
+    return signal_library.generate_sell_signal(stock_code, df, signal_type, **kwargs)
 
 def get_signal_history(stock_code: Optional[str] = None, action: Optional[str] = None) -> List[Dict[str, Any]]:
     """获取信号历史的便捷函数"""
-    return strategies.signal_library.get_signal_history(stock_code, action)
+    return signal_library.get_signal_history(stock_code, action)
 
 if __name__ == '__main__':
     # 测试信号库
@@ -730,7 +722,7 @@ if __name__ == '__main__':
             print()
     
     # 账户摘要
-    account_summary = strategies.signal_library.get_account_summary()
+    account_summary = signal_library.get_account_summary()
     print(f"💼 账户摘要:")
     print(f"   初始资金: ¥{account_summary['initial_balance']:,.2f}")
     print(f"   当前余额: ¥{account_summary['current_balance']:,.2f}")
@@ -747,7 +739,7 @@ if __name__ == '__main__':
             print(f"   {stock_code}: {position['shares']}股 @ ¥{position['avg_price']:.2f} (市值: ¥{market_value:.2f})")
     
     # 交易摘要
-    trading_summary = strategies.signal_library.get_trading_summary('000001')
+    trading_summary = signal_library.get_trading_summary('000001')
     print(f"\n📊 交易摘要 (000001):")
     print(f"   总交易数: {trading_summary['total_trades']}笔")
     print(f"   买入: {trading_summary['buy_trades']}笔 (¥{trading_summary['total_buy_amount']:,.2f})")

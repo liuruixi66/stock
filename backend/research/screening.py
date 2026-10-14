@@ -12,21 +12,22 @@ DJANGO_AVAILABLE = True
 import sys
 import os
 import pandas as pd
-from datetime import datetime
-from datetime import timedelta
+from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 from strategies.indicator_utils import resample_to_period
-import strategies.compare as strategies.compare
+import strategies.compare as compare
 # 导入信号库
 from strategies.signal_library import SIGNAL_CODES
 from strategies.signal_library import generate_buy_signal
 from strategies.signal_library import generate_sell_signal
 # 导入指标模块
-from indicators import analyze_macd_divergence
-from indicators import analyze_kdj_divergence
-from indicators import analyze_trend_signals
-from indicators import MarketAnalyzer
-from indicators import get_market_analysis_summary
+from indicators import (
+    analyze_macd_divergence,
+    analyze_kdj_divergence,
+    analyze_trend_signals,
+    MarketAnalyzer,
+    get_market_analysis_summary
+)
 # Django API 视图，支持前端 POST 调用
 import json
 
@@ -796,11 +797,7 @@ def calculate_indicator(df, indicator_name):
         return None
 # 修复指标导入 - 直接从indicators模块导入
 try:
-    from indicators import ma
-    from indicators import dif
-    from indicators import dea
-    from indicators import macd
-    from indicators import kdj
+    from indicators import ma, dif, dea, macd, kdj
 except ImportError:
     # 如果直接导入失败，尝试单独导入
     import indicators.ma as ma
@@ -1271,7 +1268,7 @@ def filter_stocks(indicator_names, conditions, data_source, extra_indicators=Non
     # 重置索引确保一致性
     df = df.reset_index(drop=True)
     
-    indicator_dir = os.path.join(os.path.dirname(__file__), 'indicators')
+    indicator_dir = str(BASE_DIR / 'indicators')
     result_mask = pd.Series([True] * len(df), index=df.index)
     
     # 先计算所有需要的指标值，存储到DataFrame中
@@ -1391,21 +1388,21 @@ def filter_stocks(indicator_names, conditions, data_source, extra_indicators=Non
             ]
             
             if name in price_volume_indicators and isinstance(cond, dict) and 'op' in cond and 'value' in cond:
-                import strategies.compare as strategies.compare
+                import strategies.compare as compare
                 op = cond['op']
                 val = cond['value']
                 print(f"处理指标 {name}: {op} {val}")
                 
                 if op == '>':
-                    mask = strategies.compare.greater(values, val)
+                    mask = compare.greater(values, val)
                 elif op == '<':
-                    mask = strategies.compare.less(values, val)
+                    mask = compare.less(values, val)
                 elif op == '>=':
-                    mask = strategies.compare.greater_equal(values, val)
+                    mask = compare.greater_equal(values, val)
                 elif op == '<=':
-                    mask = strategies.compare.less_equal(values, val)
+                    mask = compare.less_equal(values, val)
                 elif op == '=':
-                    mask = strategies.compare.equal(values, val)
+                    mask = compare.equal(values, val)
                 else:
                     mask = pd.Series([True]*len(values), index=values.index)
             else:
@@ -1833,5 +1830,4 @@ def compress_stock_results(df, compress_by_stock=True):
             'compression_ratio': 1.0,
             'error': str(e)
         }
-
 

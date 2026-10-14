@@ -1,19 +1,13 @@
 import json
-from datetime import date
-from datetime import timedelta
-from decimal import Decimal
-from decimal import InvalidOperation
+from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation
 
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from brokers import BrokerError
-from brokers import broker_catalog
-from market_data import MarketDataError
-from market_data import get_provider
-from market_data.local_history import LocalHistoryProvider
-from market_data.local_history import RESEARCH_START
-from market_data.local_history import available_end
+from brokers import BrokerError, broker_catalog
+from market_data import MarketDataError, get_provider
+from market_data.local_history import LocalHistoryProvider, RESEARCH_START, available_end
 from research.analytics import build_account_analytics
 from stockmarket.models import ResearchRun
 from stockmarket.models import SimulationAccount

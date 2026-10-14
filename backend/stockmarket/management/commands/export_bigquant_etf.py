@@ -1,7 +1,6 @@
 from pathlib import Path
 
-from django.core.management.base import BaseCommand
-from django.core.management.base import CommandError
+from django.core.management.base import BaseCommand, CommandError
 
 from strategies import etf_rotation
 
@@ -16,7 +15,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         root = Path(etf_rotation.__file__).parent
         core = (root / 'etf_rotation.py').read_text(encoding='utf-8')
-        adapter = (root / 'bigquant_etf_rotation.py').read_text(encoding='utf-8')
+        adapter = (root / 'platforms' / 'bigquant_etf_rotation.py').read_text(encoding='utf-8')
         local_import = 'from strategies.etf_rotation import RotationBar, RotationConfig, build_rotation_targets\n'
         if adapter.count(local_import) != 1:
             raise CommandError('Adapter core import changed; export needs updating')

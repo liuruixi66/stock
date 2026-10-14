@@ -1,5 +1,38 @@
 # API 接口文档
 
+## 后端模块分层（2026-10-14）
+
+后端按职责拆分，已有HTTP路径、数据库模型/迁移、管理命令名及ETF策略参数保持不变。
+
+| 目录 | 职责 |
+| --- | --- |
+| [config](./backend/config/) | Django settings、总路由、ASGI/WSGI入口、统一文件路径 |
+| [api](./backend/api/) | HTTP请求解析、响应和业务路由；不放策略算法 |
+| [strategies](./backend/strategies/) | ETF规则、技术分析和信号计算，不初始化Django、不下券商订单 |
+| [strategies/platforms](./backend/strategies/platforms/) | 聚宽、BigQuant平台回调与委托适配 |
+| [research](./backend/research/) | 回测、组合研究、绩效统计、数据校验及旧筛选服务 |
+| [execution](./backend/execution/) | 账户、订单、同步及模拟交易执行 |
+| [execution/compat](./backend/execution/compat/) | 原系统的跨操作系统交易兼容实现；其中随机模拟数据不是实盘行情 |
+| [brokers](./backend/brokers/) | QMT/FUTU/IB券商适配，仍与策略规则分开 |
+| [market_data](./backend/market_data/) | 行情来源、下载和本地历史快照 |
+| [stockmarket](./backend/stockmarket/) | Django应用身份、ORM模型、迁移、admin和管理命令 |
+| [stockmarket/tests](./backend/stockmarket/tests/) | 策略、平台、API、执行及目录边界回归测试 |
+| [tools](./backend/tools/) | 独立诊断/旧筛选CLI，按需运行，不随Web启动执行 |
+| [trading_system](./backend/trading_system/) | 保留的旧交易系统及内置SDK边界，不由新Web入口自动启动 |
+
+`backend/manage.py` 与 `backend/start_server.py` 仍是启动入口，`.env`、数据库和缓存仍位于后端根目录；配置模块由`myproject.settings`改为`config.settings`，外部部署若显式设置了旧模块路径需同步修改。应用名`stockmarket`不变，因此本次不需要新建或重做数据库迁移。内部Python导入路径已随目录迁移更新，不保留两套重复实现。
+
+旧`filter_stocks.py`的HTTP函数已分离到[screening_views.py](./backend/api/screening_views.py)，数据库筛选/计算保留在[screening.py](./backend/research/screening.py)，命令行示例移至[screen_stocks.py](./backend/tools/screen_stocks.py)。服务模块不再自行初始化Django或切换工作目录，由Web/CLI入口负责初始化。原本未注册的旧筛选及mock股票接口没有因此新增到HTTP路由。
+
+在`backend`目录下使用模块方式运行诊断工具：
+
+```powershell
+..\.venv\Scripts\python.exe -m tools.time_range_validator
+..\.venv\Scripts\python.exe -m tools.trade_analysis
+```
+
+两者使用统一`backend/cache`路径，不再依赖旧Linux桌面目录。时间验证工具里的前端日期仍是历史硬编码样例，不能把它的报告当成实时前端扫描结果。旧筛选服务仍依赖原有`indicators`模块；当前仓库中该模块缺失，本次结构整理不补造指标实现，也不宣称旧筛选CLI已可用。旧交易系统的SDK、策略配置和相对路径约定保留，未执行实盘或旧调度器。
+
 ## BigQuant ETF 研究策略导出与平台接口（2026-10-14）
 
 本节描述独立的平台适配，不新增本系统HTTP接口，不连接券商实盘。完整代码文件为 [bigquant_etf_rotation_v1.py](./bigquant_etf_rotation_v1.py)，适配源代码为 [bigquant_etf_rotation.py](./backend/strategies/platforms/bigquant_etf_rotation.py)，复用项目的 [ETF规则核心](./backend/strategies/etf_rotation.py)。原MACD/KDJ功能不变。
@@ -22,7 +55,7 @@
 
 ```powershell
 Push-Location backend
-..\.venv\Scripts\python.exe manage.py test stockmarket.tests.test_services.test_bigquant_etf stockmarket.tests.test_services.test_etf_rotation stockmarket.tests.test_services.test_etf_commands stockmarket.tests.test_services.QuantResearchTests --noinput
+..\.venv\Scripts\python.exe manage.py test stockmarket --noinput
 Pop-Location
 ```
 

@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 from math import sqrt
-from statistics import mean
-from statistics import pstdev
-from typing import Iterable
-from typing import Mapping
-from typing import Sequence
+from statistics import mean, pstdev
+from typing import Iterable, Mapping, Sequence
 
 from market_data import HistoricalBar
 

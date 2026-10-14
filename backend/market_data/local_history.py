@@ -5,10 +5,7 @@ import json
 import math
 import os
 import re
-from datetime import date
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 

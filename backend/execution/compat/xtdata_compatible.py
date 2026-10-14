@@ -3,14 +3,8 @@ XT数据模块兼容层 - 类型安全且现代化的实现
 """
 import pandas as pd
 import numpy as np
-from typing import Optional
-from typing import List
-from typing import Dict
-from typing import Any
-from typing import Union
-from typing import Callable
-from datetime import datetime
-from datetime import timedelta
+from typing import Optional, List, Dict, Any, Union, Callable
+from datetime import datetime, timedelta
 import random
 
 class XTDataCompatible:

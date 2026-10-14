@@ -1,20 +1,14 @@
 """BigTrader daily ETF research adapter; export before uploading to AIStudio."""
 
-from datetime import date
-from datetime import timedelta
+from datetime import date, timedelta
 from importlib import import_module
 from math import isfinite
 from numbers import Real
-from typing import Dict
-from typing import Mapping
-from typing import Optional
-from typing import Protocol
+from typing import Dict, Mapping, Optional, Protocol
 
 import pandas as pd
 
-from strategies.etf_rotation import RotationBar
-from strategies.etf_rotation import RotationConfig
-from strategies.etf_rotation import build_rotation_targets
+from strategies.etf_rotation import RotationBar, RotationConfig, build_rotation_targets
 
 
 ETF_UNIVERSE = (

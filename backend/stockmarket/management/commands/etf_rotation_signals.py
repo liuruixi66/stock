@@ -4,8 +4,7 @@ import json
 from datetime import date
 from pathlib import Path
 
-from django.core.management.base import BaseCommand
-from django.core.management.base import CommandError
+from django.core.management.base import BaseCommand, CommandError
 
 from market_data import MarketDataError
 from market_data.local_history import LocalHistoryProvider

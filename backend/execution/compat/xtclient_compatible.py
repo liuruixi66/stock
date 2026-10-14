@@ -2,12 +2,7 @@
 XT客户端模块兼容层 - 类型安全的交易客户端实现
 """
 import pandas as pd
-from typing import Optional
-from typing import List
-from typing import Dict
-from typing import Any
-from typing import Union
-from typing import Callable
+from typing import Optional, List, Dict, Any, Union, Callable
 from datetime import datetime
 import time
 import random

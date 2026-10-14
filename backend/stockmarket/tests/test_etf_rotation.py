@@ -5,14 +5,12 @@ import sys
 import types
 import unittest
 from dataclasses import replace
-from datetime import date
-from datetime import datetime
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from strategies import etf_rotation
 from strategies.etf_rotation import RotationBar
 from strategies.etf_rotation import RotationConfig
 from strategies.etf_rotation import build_rotation_targets
@@ -146,7 +144,7 @@ class JoinQuantExecutionTests(unittest.TestCase):
                      'set_slippage', 'PriceRelatedSlippage', 'run_weekly'):
             setattr(fake, name, Mock())
         self.api = fake
-        path = Path(__file__).with_name('joinquant_etf_rotation.py')
+        path = Path(etf_rotation.__file__).parent / 'platforms' / 'joinquant_etf_rotation.py'
         spec = importlib.util.spec_from_file_location('tested_joinquant_adapter', path)
         self.adapter = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, {'jqdata': fake}):
@@ -315,9 +313,9 @@ class JoinQuantExecutionTests(unittest.TestCase):
 
 class StrategyExportTests(unittest.TestCase):
     def test_combined_strategy_is_standalone_and_python38_parseable(self):
-        root = Path(__file__).parent
+        root = Path(etf_rotation.__file__).parent
         core = (root / 'etf_rotation.py').read_text(encoding='utf-8')
-        adapter = (root / 'joinquant_etf_rotation.py').read_text(encoding='utf-8')
+        adapter = (root / 'platforms' / 'joinquant_etf_rotation.py').read_text(encoding='utf-8')
         local_import = 'from strategies.etf_rotation import RotationBar, RotationConfig, build_rotation_targets\n'
         self.assertEqual(adapter.count(local_import), 1)
         combined = core + '\n\n' + adapter.replace(local_import, '')

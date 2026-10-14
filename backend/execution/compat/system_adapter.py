@@ -4,10 +4,7 @@
 import os
 import sys
 import platform
-from typing import Optional
-from typing import Dict
-from typing import Any
-from typing import Union
+from typing import Optional, Dict, Any, Union
 import pandas as pd
 
 class SystemAdapter:
@@ -60,8 +57,8 @@ class SystemAdapter:
         }
 
 # 全局系统适配器实例
-execution.compat.system_adapter = SystemAdapter()
-trading_modules = execution.compat.system_adapter.get_trading_modules()
+system_adapter = SystemAdapter()
+trading_modules = system_adapter.get_trading_modules()
 
 def get_system_info() -> Dict[str, str]:
     """返回操作系统、机器架构和 Python 版本等诊断信息。"""
@@ -75,15 +72,15 @@ def get_system_info() -> Dict[str, str]:
 
 def is_windows() -> bool:
     """判断当前运行环境是否为 Windows。"""
-    return execution.compat.system_adapter.is_windows
+    return system_adapter.is_windows
 
 def is_linux() -> bool:
     """判断当前运行环境是否为 Linux。"""
-    return execution.compat.system_adapter.is_linux
+    return system_adapter.is_linux
 
 def get_compatible_path(path: str) -> str:
     """按当前系统转换路径分隔符，不负责验证路径是否存在。"""
-    if execution.compat.system_adapter.is_windows:
+    if system_adapter.is_windows:
         return path.replace('/', '\\')
     else:
         return path.replace('\\', '/')

@@ -2,14 +2,9 @@
 
 from dataclasses import dataclass
 from datetime import date
-from math import isfinite
-from math import sqrt
-from statistics import mean
-from statistics import pstdev
-from typing import Dict
-from typing import Mapping
-from typing import Optional
-from typing import Sequence
+from math import isfinite, sqrt
+from statistics import mean, pstdev
+from typing import Dict, Mapping, Optional, Sequence
 
 
 @dataclass(frozen=True)

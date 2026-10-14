@@ -11,6 +11,7 @@ from datetime import datetime
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from config.paths import CACHE_DIR
 
 @csrf_exempt
 @require_http_methods(["GET"])
@@ -24,7 +25,7 @@ def get_available_date_ranges(request):
         print("📅 开始获取可用日期范围...")
         
         # 获取cache目录路径
-        cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
+        cache_dir = str(CACHE_DIR)
         
         if not os.path.exists(cache_dir):
             print(f"❌ Cache目录不存在: {cache_dir}")

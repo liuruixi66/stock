@@ -2,9 +2,7 @@
 
 from math import isfinite
 
-from strategies.etf_rotation import RotationBar
-from strategies.etf_rotation import RotationConfig
-from strategies.etf_rotation import build_rotation_targets
+from strategies.etf_rotation import RotationBar, RotationConfig, build_rotation_targets
 from jqdata import *
 
 

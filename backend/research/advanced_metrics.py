@@ -5,10 +5,7 @@
 
 import pandas as pd
 import numpy as np
-from typing import List
-from typing import Dict
-from typing import Any
-from typing import Optional
+from typing import List, Dict, Any, Optional
 import math
 
 def calculate_advanced_metrics(trades_data: List[Dict], initial_cash: float, final_cash: float, 

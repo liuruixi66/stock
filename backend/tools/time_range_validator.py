@@ -6,6 +6,7 @@
 import json
 import requests
 from datetime import datetime
+from config.paths import CACHE_DIR
 
 def validate_time_range_consistency():
     """验证前后端时间范围一致性"""
@@ -15,7 +16,7 @@ def validate_time_range_consistency():
     # 1. 检查后端缓存数据
     print("\n📁 后端缓存数据:")
     try:
-        with open('/home/liu/桌面/stock-20250730_update./backend/cache/earnings_overview_latest_equal_weight.json', 'r', encoding='utf-8') as f:
+        with open(CACHE_DIR / 'earnings_overview_latest_equal_weight.json', 'r', encoding='utf-8') as f:
             backend_data = json.load(f)
         
         time_period = backend_data.get('time_period', {})
@@ -165,7 +166,7 @@ def validate_time_range_consistency():
         ]
     }
     
-    with open('/home/liu/桌面/stock-20250730_update./backend/cache/time_range_validation_report.json', 'w', encoding='utf-8') as f:
+    with open(CACHE_DIR / 'time_range_validation_report.json', 'w', encoding='utf-8') as f:
         json.dump(fix_report, f, ensure_ascii=False, indent=2)
     
     print(f"\n📄 详细验证报告已保存到: time_range_validation_report.json")
