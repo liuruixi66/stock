@@ -1,5 +1,57 @@
 # API 接口文档
 
+## BigQuant ETF 研究策略导出与平台接口（2026-10-14）
+
+本节描述独立的平台适配，不新增本系统HTTP接口，不连接券商实盘。完整代码文件为 [bigquant_etf_rotation_v1.py](./bigquant_etf_rotation_v1.py)，适配源代码为 [bigquant_etf_rotation.py](./backend/stockmarket/bigquant_etf_rotation.py)，复用项目的 [ETF规则核心](./backend/stockmarket/etf_rotation.py)。原MACD/KDJ功能不变。
+
+### 导出与运行
+
+在项目根目录 PowerShell 中执行，已存在的输出文件会拒绝覆盖：
+
+```powershell
+.\.venv\Scripts\python.exe backend\manage.py export_bigquant_etf --output .\bigquant_etf_rotation_v1.py
+```
+
+1. 登录 BigQuant 的 AIStudio/策略开发，新建Python策略代码或Notebook代码单元，将生成文件**全部内容**粘贴进去，不仅复制交易函数。
+2. 运行默认入口 `performance = run_backtest()`。默认10万元是**模拟资金**，不要求真实入金；起始日期2024-01-01，结束日期为运行当天前一天。
+3. 为固定实验区间，可改为 `performance = run_backtest("2024-01-01", "2026-10-13", 100000)`。检查基金行情权限、预热数据和成交日志，再观察净费后收益、最大回撤、Sharpe、费用和现金比例；不只看总收益。
+4. 回测正常后，选择此策略的模拟交易/部署入口，保持日线频率与相同参数。若当前编辑器只有单个函数槽，应使用AIStudio完整Python策略方式，不把整个启动脚本填入函数槽。
+5. 首周检查跨日卖出/买入、拒单及部分成交、每日重启状态保持、基金佣金和调仓日。**不要绑定实盘账号**，代码没有实盘开户/认证功能，但平台可能允许另行将模拟策略信号绑定实盘。
+
+本地验证命令：
+
+```powershell
+Push-Location backend
+..\.venv\Scripts\python.exe manage.py test stockmarket.test_bigquant_etf stockmarket.test_etf_rotation stockmarket.test_etf_commands stockmarket.tests.QuantResearchTests --noinput
+Pop-Location
+```
+
+### 已核对的官方接口
+
+- [BigTrader API](https://bigquant.com/wiki/doc/nxDOuIdhm2)：`context.order`返回整数；负数表示发送失败，非负数**不代表成交**。当前日线Bar下单在下一Bar撮合。模拟盘每天重新初始化，`context.user_store.init_once`用于跨日保持状态。
+- [策略开发教程](https://bigquant.com/wiki/doc/5qj3KAOmx8)：`M.bigtrader.v30`、`initialize`、`handle_data`和 `rebalance_period.is_signal_date`。周度首交易日的信号日由引擎日历判断，不硬编码自然周一。
+- [基金后复权日行情](https://bigquant.com/data/datasources/cn_fund_bar1d)：使用日期、基金代码、`close/high/low/volume/amount`，`amount`是真实成交额，历史价格是供应商后复权口径。
+
+平台运行时延迟加载官方 `dai`、`bigquant.bigtrader` 和 `bigmodule`；不使用聚宽的 `jqdata/g/log`。普通本地Python无法直接执行平台回测，不需要为本地测试安装平台私有SDK，也不屏蔽Pylance诊断。
+
+### 策略与执行约束
+
+- 池：510300.SH、510500.SH、159915.SZ、588000.SH、512100.SH、512880.SH、512010.SH、512660.SH、515050.SH、518880.SH。
+- 截至信号日查询600自然日历史，返回结果再剔除未来日期。数据需有至少120根K线和180自然日**可见历史跨度**；这是上市成熟度的代理，不是精确上市日期检查。近20日平均成交额需≥2000万元。
+- 仅在收盘高于MA120且20/60日动量均为正、无压力/稀薄状态时参与排名。分数为 `(0.4*M20+0.6*M60)/max(20日年化波动, 3%)`，选前三。
+- 压力状态：20日年化波动>45%，或>2倍 `max(60日年化波动,3%)`，或最新日跌幅≥4%，或日振幅>8%且量比>2；量比<0.3为稀薄状态。量比用最新成交量/此前20日平均成交量。不是订单簿或真实主动买卖订单流。
+- 波动率倒数权重向等权收缩50%，单标的最多40%、总仓位最多95%；总暴露另受15%保守波动预算限制，剩余现金不重新分配。这不是熵优化求解器或协方差风险平价，也不保证未来真实波动。
+- 日线收盘信号、下一Bar开盘撮合，**不同于聚宽周一10:00调仓**。先减仓，后续日线确认持仓变化后才买入，换仓可能多空仓一个交易日。
+- 状态用`user_store`保存，同日不重复委托，有未完成订单不加单；旧目标超过7自然日失效，新周信号替换旧目标。失败或部分成交未被当作成功，不在回调内阻塞等待。
+- 退出不受3%净资产调仓阈值限制；其他微小调整跳过。每次买入用当前可用资金并本地预留已发买单的资金，按100份整手，预留5元最低佣金和0.5%预算缓冲。100元本金通常不足以执行该多ETF组合。
+- 零成交量、无效价格不发单；可卖数量使用`avail_qty`，未来开盘停牌、涨跌停和成交量上限由平台撮合处理，不能保证成交。
+- 双边佣金0.0003、最低5元、基金印花税0，百分比滑点0.002，单Bar成交量占比上限2.5%；这些只是研究假设，请核对平台费用与成交报告。
+- 缺字段、重复日期、非法成交额及全部行情无效显式失败，不假装成功；当前持有ETF的历史缺失时停止调仓，不当成清仓信号。专用策略组合中出现池外持仓时报错，不擅自卖出其他股票。
+
+研究灵感来自用户桌面模型生成的论文综述，不是已经核验的论文原文或论文复现。固定ETF池有选择/幸存者偏差，ETF间存在高度相关性。应与同池等权、沪深300买入持有、无过滤/无收缩版本在相同区间和费用下对比。
+
+**验证边界**：本地测试核对规则、模拟API契约、资金预算与导出文件；尚未登录BigQuant账户、执行服务器回测或创建模拟盘，没有平台收益结果。数据权限、模块版本、报价/复权口径和部署入口仍需首次平台运行核验。出现错误时保留完整异常和版本信息，不通过忽略异常“跑通”。
+
 ## 📋 接口概览
 
 ### 基本信息

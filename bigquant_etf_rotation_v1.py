@@ -1,0 +1,481 @@
+"""Portable, long-only ETF rotation research rules (no broker or network calls)."""
+
+from dataclasses import dataclass
+from datetime import date
+from math import isfinite, sqrt
+from statistics import mean, pstdev
+from typing import Dict, Mapping, Optional, Sequence
+
+
+@dataclass(frozen=True)
+class RotationBar:
+    date: date
+    close: float
+    high: float
+    low: float
+    volume: float
+
+
+@dataclass(frozen=True)
+class RotationConfig:
+    short_window: int = 20
+    momentum_window: int = 60
+    trend_window: int = 120
+    volatility_window: int = 20
+    holdings: int = 3
+    shrinkage: float = 0.5
+    max_weight: float = 0.40
+    max_exposure: float = 0.95
+    target_volatility: float = 0.15
+    max_asset_volatility: float = 0.45
+    max_daily_loss: float = 0.04
+
+    @property
+    def history_count(self) -> int:
+        return max(self.trend_window, self.momentum_window + 1,
+                   self.volatility_window + 1, self.short_window + 1)
+
+    def validate(self) -> None:
+        windows = (self.short_window, self.momentum_window, self.trend_window,
+                   self.volatility_window, self.holdings)
+        if any(isinstance(value, bool) or not isinstance(value, int) or value < 1
+               for value in windows):
+            raise ValueError('Windows and holdings must be positive integers')
+        if not 2 <= self.volatility_window <= self.momentum_window:
+            raise ValueError('Require 2 <= volatility_window <= momentum_window')
+        if not 2 <= self.short_window < self.momentum_window < self.trend_window:
+            raise ValueError('Require 2 <= short_window < momentum_window < trend_window')
+        if not isfinite(self.shrinkage) or not 0 <= self.shrinkage <= 1:
+            raise ValueError('shrinkage must be in [0, 1]')
+        for name in ('max_weight', 'max_exposure', 'target_volatility',
+                     'max_asset_volatility', 'max_daily_loss'):
+            value = getattr(self, name)
+            if not isfinite(value) or not 0 < value <= 1:
+                raise ValueError('{} must be in (0, 1]'.format(name))
+
+
+def shrink_to_equal(weights: Mapping[str, float], strength: float) -> Dict[str, float]:
+    """Convex equal-weight shrinkage, not an entropy optimization solver."""
+    if not isfinite(strength) or not 0 <= strength <= 1:
+        raise ValueError('strength must be in [0, 1]')
+    if not weights:
+        return {}
+    equal = 1.0 / len(weights)
+    return {symbol: (1 - strength) * weight + strength * equal
+            for symbol, weight in weights.items()}
+
+
+def build_rotation_targets(
+    histories: Mapping[str, Sequence[RotationBar]],
+    as_of: date,
+    config: Optional[RotationConfig] = None,
+) -> dict:
+    """Compute weights using completed bars dated at or before explicit as_of.
+
+    Future bars are discarded before validation and scoring. Invalid, stale and
+    short histories have explicit rejection reasons; they never receive weight.
+    """
+    config = config or RotationConfig()
+    config.validate()
+    if not histories:
+        raise ValueError('ETF universe must not be empty')
+    features = {}
+    rejected = {}
+    for symbol, history in histories.items():
+        bars = [bar for bar in history if bar.date <= as_of]
+        if any(left.date >= right.date for left, right in zip(bars, bars[1:])):
+            rejected[symbol] = 'duplicate_or_unsorted_dates'
+            continue
+        if len(bars) < config.history_count:
+            rejected[symbol] = 'insufficient_history'
+            continue
+        bars = bars[-config.history_count:]
+        if bars[-1].date != as_of:
+            rejected[symbol] = 'stale_history'
+            continue
+        if any(not all(isfinite(value) for value in
+                       (bar.close, bar.high, bar.low, bar.volume))
+               or bar.low <= 0 or not bar.low <= bar.close <= bar.high
+               or bar.volume < 0 for bar in bars):
+            rejected[symbol] = 'invalid_ohlcv'
+            continue
+        closes = [bar.close for bar in bars]
+        returns = [right / left - 1 for left, right in zip(closes, closes[1:])]
+        volatility = pstdev(returns[-config.volatility_window:]) * sqrt(252)
+        slow_volatility = pstdev(returns[-config.momentum_window:]) * sqrt(252)
+        prior_volume = mean(bar.volume for bar in bars[-config.short_window - 1:-1])
+        if prior_volume <= 0 or bars[-1].volume <= 0 or volatility <= 1e-10:
+            rejected[symbol] = 'inactive_or_zero_volatility'
+            continue
+        volume_ratio = bars[-1].volume / prior_volume
+        short_momentum = closes[-1] / closes[-config.short_window - 1] - 1
+        momentum = closes[-1] / closes[-config.momentum_window - 1] - 1
+        trend_ma = mean(closes[-config.trend_window:])
+        intraday_range = (bars[-1].high - bars[-1].low) / closes[-2]
+        stress = (volatility > config.max_asset_volatility
+                  or volatility > 2 * max(slow_volatility, 0.03)
+                  or returns[-1] <= -config.max_daily_loss
+                  or (intraday_range > 0.08 and volume_ratio > 2))
+        if stress:
+            regime = 'stress'
+        elif volume_ratio < 0.3:
+            regime = 'thin'
+        elif closes[-1] > trend_ma and short_momentum > 0 and momentum > 0:
+            regime = 'trend'
+        else:
+            regime = 'weak'
+        features[symbol] = {
+            'short_momentum': short_momentum,
+            'medium_momentum': momentum,
+            'annual_volatility': volatility,
+            'volume_ratio': volume_ratio,
+            'trend_ma': trend_ma,
+            'regime': regime,
+            'score': (0.4 * short_momentum + 0.6 * momentum) / max(volatility, 0.03),
+        }
+    ranked = sorted(
+        (symbol for symbol, feature in features.items() if feature['regime'] == 'trend'),
+        key=lambda symbol: (-features[symbol]['score'], symbol),
+    )
+    selected = ranked[:config.holdings]
+    weights = {symbol: 0.0 for symbol in histories}
+    if selected:
+        inverse = {symbol: 1 / max(features[symbol]['annual_volatility'], 0.03)
+                   for symbol in selected}
+        total = sum(inverse.values())
+        allocation = shrink_to_equal(
+            {symbol: value / total for symbol, value in inverse.items()}, config.shrinkage,
+        )
+        # The weighted sum of asset volatilities bounds covariance-based vol.
+        conservative_vol = sum(allocation[symbol] * features[symbol]['annual_volatility']
+                               for symbol in selected)
+        exposure = min(config.max_exposure, config.target_volatility / conservative_vol)
+        for symbol in selected:
+            weights[symbol] = min(config.max_weight, exposure * allocation[symbol])
+    return {
+        'strategy': 'regime_filtered_etf_rotation_v1',
+        'as_of': as_of.isoformat(),
+        'weights': weights,
+        'cash_weight': 1 - sum(weights.values()),
+        'selected': selected,
+        'features': features,
+        'rejected': rejected,
+    }
+
+
+"""BigTrader daily ETF research adapter; export before uploading to AIStudio."""
+
+from datetime import date, timedelta
+from importlib import import_module
+from math import isfinite
+from numbers import Real
+from typing import Dict, Mapping, Optional, Protocol
+
+import pandas as pd
+
+
+
+ETF_UNIVERSE = (
+    '510300.SH', '510500.SH', '159915.SZ', '588000.SH', '512100.SH',
+    '512880.SH', '512010.SH', '512660.SH', '515050.SH', '518880.SH',
+)
+REQUIRED_COLUMNS = {'date', 'instrument', 'close', 'high', 'low', 'volume', 'amount'}
+MIN_AVERAGE_AMOUNT = 20000000
+REBALANCE_THRESHOLD = 0.03
+STATE_KEY = 'etf_rotation_pending_v1'
+SIGNAL_KEY = 'etf_rotation_signal_date_v1'
+ATTEMPT_KEY = 'etf_rotation_attempt_date_v1'
+
+
+class Position(Protocol):
+    current_qty: int
+    avail_qty: int
+    market_value: float
+
+
+class Logger(Protocol):
+    def info(self, message: str) -> None: ...
+    def warning(self, message: str) -> None: ...
+
+
+class UserStore(Protocol):
+    def init_once(self, **kwargs: object) -> None: ...
+    def __getitem__(self, key: str): ...
+    def __setitem__(self, key: str, value: object) -> None: ...
+
+
+class RebalancePeriod(Protocol):
+    def is_signal_date(self, day: date) -> bool: ...
+
+
+class BigQuantContext(Protocol):
+    user_store: UserStore
+    logger: Logger
+    rebalance_period: RebalancePeriod
+
+    def get_positions(self) -> Mapping[str, Position]: ...
+    def get_open_orders(self): ...
+    def get_portfolio_value(self) -> float: ...
+    def get_available_cash(self) -> float: ...
+    def get_last_price(self, instrument: str) -> float: ...
+    def order(self, instrument: str, order_qty: int) -> int: ...
+    def get_error_msg(self, return_code: int) -> str: ...
+    def set_commission(self, commission: object) -> None: ...
+    def set_slippage_value(self, slippage_type: int, slippage_value: float) -> None: ...
+
+
+def initialize(context: BigQuantContext) -> None:
+    bigtrader = import_module('bigquant.bigtrader')
+    context.set_commission(
+        bigtrader.PerOrder(buy_cost=0.0003, sell_cost=0.0003, min_cost=5, tax_ratio=0),
+    )
+    context.set_slippage_value(slippage_type=2, slippage_value=0.002)
+    context.user_store.init_once(**{STATE_KEY: None, SIGNAL_KEY: '', ATTEMPT_KEY: ''})
+    context.logger.info('ETF research V1: daily signals, next-bar execution; paper use only')
+
+
+def load_fund_history(as_of: date) -> pd.DataFrame:
+    dai = import_module('dai')
+    instruments = ', '.join("'{}'".format(symbol) for symbol in ETF_UNIVERSE)
+    sql = (
+        'SELECT date, instrument, close, high, low, volume, amount '
+        'FROM cn_fund_bar1d WHERE instrument IN ({}) ORDER BY instrument, date'
+    ).format(instruments)
+    frame = dai.query(sql, filters={
+        'date': [(as_of - timedelta(days=600)).isoformat(), as_of.isoformat()],
+    }).df()
+    if not isinstance(frame, pd.DataFrame):
+        raise ValueError('cn_fund_bar1d query did not return a DataFrame')
+    return frame
+
+
+def _number(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError('Non-numeric fund field {}: {}'.format(field, type(value)))
+    return float(value)
+
+
+def targets_from_fund_frame(
+    frame: pd.DataFrame, as_of: date, config: Optional[RotationConfig] = None,
+) -> dict:
+    config = config or RotationConfig()
+    config.validate()
+    missing = REQUIRED_COLUMNS - set(frame.columns)
+    if missing:
+        raise ValueError('Missing cn_fund_bar1d fields: {}'.format(sorted(missing)))
+    frame = frame.copy()
+    frame['date'] = pd.to_datetime(frame['date'], errors='raise').dt.date
+    if frame['date'].isna().any():
+        raise ValueError('Fund history contains missing dates')
+    frame = frame[frame['date'] <= as_of]
+    histories = {}
+    excluded = {}
+    for symbol in ETF_UNIVERSE:
+        rows = frame[frame['instrument'] == symbol]
+        if rows.empty:
+            excluded[symbol] = 'missing_history'
+            continue
+        if rows['date'].duplicated().any():
+            raise ValueError('Duplicate ETF dates: {}'.format(symbol))
+        rows = rows.sort_values('date')
+        if rows['date'].iloc[-1] != as_of:
+            excluded[symbol] = 'stale_history'
+            continue
+        if len(rows) < config.history_count:
+            excluded[symbol] = 'insufficient_history'
+            continue
+        # Observed coverage is a conservative seasoning proxy, not listing metadata.
+        if (as_of - rows['date'].iloc[0]).days < 180:
+            excluded[symbol] = 'observed_history_under_180_days'
+            continue
+        amounts = [_number(value, 'amount') for value in rows['amount'].iloc[-20:]]
+        if not all(isfinite(value) and value >= 0 for value in amounts):
+            raise ValueError('Invalid ETF amount: {}'.format(symbol))
+        if sum(amounts) / len(amounts) < MIN_AVERAGE_AMOUNT:
+            excluded[symbol] = 'illiquid'
+            continue
+        bars = []
+        for row in rows.itertuples(index=False):
+            if not isinstance(row.date, date):
+                raise ValueError('Invalid fund bar date: {}'.format(symbol))
+            bars.append(RotationBar(
+                row.date, _number(row.close, 'close'), _number(row.high, 'high'),
+                _number(row.low, 'low'), _number(row.volume, 'volume'),
+            ))
+        histories[symbol] = bars
+    if not histories:
+        raise ValueError('No usable ETF histories; no orders submitted: {}'.format(excluded))
+    result = build_rotation_targets(histories, as_of, config)
+    result['rejected'].update(excluded)
+    if not result['features']:
+        raise ValueError('All ETF histories rejected; no orders submitted: {}'.format(
+            result['rejected'],
+        ))
+    result['weights'] = {symbol: result['weights'].get(symbol, 0.0) for symbol in ETF_UNIVERSE}
+    return result
+
+
+def handle_data(context: BigQuantContext, data) -> None:
+    signal_day = data.current_dt.date()
+    day_text = signal_day.isoformat()
+    if context.get_open_orders():
+        context.logger.warning('Outstanding orders; defer ETF rebalance')
+        return
+    if context.user_store[ATTEMPT_KEY] == day_text:
+        return
+    if (context.rebalance_period.is_signal_date(signal_day)
+            and context.user_store[SIGNAL_KEY] != day_text):
+        result = targets_from_fund_frame(load_fund_history(signal_day), signal_day)
+        held = {symbol for symbol, position in context.get_positions().items()
+                if position.current_qty > 0}
+        unreliable = {
+            symbol: reason for symbol, reason in result['rejected'].items()
+            if symbol in held and reason != 'illiquid'
+        }
+        if unreliable:
+            raise ValueError('Held ETF data unavailable; no orders submitted: {}'.format(
+                unreliable,
+            ))
+        context.logger.info('ETF targets: {}'.format(result))
+        context.user_store[STATE_KEY] = {
+            'signal_date': day_text, 'weights': result['weights'],
+        }
+        context.user_store[SIGNAL_KEY] = day_text
+    pending = context.user_store[STATE_KEY]
+    if pending is None:
+        return
+    if (signal_day - date.fromisoformat(pending['signal_date'])).days > 7:
+        context.logger.warning('ETF target expired; wait for a new weekly signal')
+        context.user_store[STATE_KEY] = None
+        return
+    context.user_store[ATTEMPT_KEY] = day_text
+    if execute_targets(context, data, pending['weights']):
+        context.user_store[STATE_KEY] = None
+
+
+def _send_order(context: BigQuantContext, symbol: str, quantity: int) -> bool:
+    result = context.order(symbol, quantity)
+    if not isinstance(result, int):
+        raise ValueError('Unexpected BigTrader order return type: {}'.format(type(result)))
+    if result < 0:
+        context.logger.warning('Order failed {} x {}: {}'.format(
+            symbol, quantity, context.get_error_msg(result),
+        ))
+        return False
+    context.logger.info('Order sent (not a fill) {} x {}, return={}'.format(
+        symbol, quantity, result,
+    ))
+    return True
+
+
+def _price_if_active(context: BigQuantContext, data, symbol: str) -> Optional[float]:
+    price = float(context.get_last_price(symbol))
+    volume = float(data.current(symbol, 'volume'))
+    if not isfinite(price) or price <= 0 or not isfinite(volume) or volume <= 0:
+        context.logger.warning('Inactive/invalid-price ETF: {}'.format(symbol))
+        return None
+    return price
+
+
+def execute_targets(context: BigQuantContext, data, weights: Dict[str, float]) -> bool:
+    """Return False while reductions/orders remain unresolved; never assume fills."""
+    config = RotationConfig()
+    if (any(symbol not in ETF_UNIVERSE or not isfinite(weight)
+            or not 0 <= weight <= config.max_weight for symbol, weight in weights.items())
+            or sum(weights.values()) > config.max_exposure + 1e-10):
+        raise ValueError('Invalid ETF target weights')
+    equity = float(context.get_portfolio_value())
+    cash = float(context.get_available_cash())
+    if not isfinite(equity) or equity <= 0 or not isfinite(cash) or cash < 0:
+        raise ValueError('Portfolio equity/cash is invalid')
+    if context.get_open_orders():
+        context.logger.warning('Outstanding orders; no duplicate orders')
+        return False
+    positions = context.get_positions()
+    if any(symbol not in ETF_UNIVERSE and position.current_qty > 0
+           for symbol, position in positions.items()):
+        raise ValueError('Use a dedicated ETF strategy account; unrelated positions found')
+    if any(position.current_qty < 0 or position.avail_qty < 0
+           or not isfinite(position.market_value) or position.market_value < 0
+           for position in positions.values()):
+        raise ValueError('Invalid or short ETF position')
+    threshold = equity * REBALANCE_THRESHOLD
+    needs_reduction = False
+    for symbol in sorted(positions):
+        position = positions[symbol]
+        if position.current_qty == 0:
+            continue
+        target = equity * weights.get(symbol, 0)
+        reduction = position.market_value - target
+        if reduction <= 0 or (target > 0 and reduction < threshold):
+            continue
+        price = _price_if_active(context, data, symbol)
+        if price is None:
+            needs_reduction = True
+            continue
+        quantity = position.current_qty if target == 0 else int(reduction / price / 100) * 100
+        if quantity == 0:
+            context.logger.info('ETF reduction below one lot: {}'.format(symbol))
+            continue
+        quantity = min(quantity, position.avail_qty, position.current_qty)
+        needs_reduction = True
+        if quantity <= 0:
+            context.logger.warning('No sellable ETF shares (T+1): {}'.format(symbol))
+            continue
+        if not _send_order(context, symbol, -quantity):
+            return False
+    if needs_reduction:
+        context.logger.info('Reductions pending; verify actual holdings on a later daily bar')
+        return False
+    gross = sum(position.market_value for position in positions.values())
+    exposure_room = max(0.0, equity * config.max_exposure - gross)
+    sent_buy = False
+    for symbol in sorted(weights, key=lambda code: (-weights[code], code)):
+        position = positions.get(symbol)
+        held_value = position.market_value if position is not None else 0.0
+        increase = equity * weights[symbol] - held_value
+        if increase <= 0 or increase < threshold:
+            continue
+        price = _price_if_active(context, data, symbol)
+        if price is None:
+            return False
+        budget = min(increase, exposure_room, max(0.0, cash - 5)) / 1.005
+        quantity = int(budget / price / 100) * 100
+        if quantity < 100:
+            context.logger.info('Below one ETF lot/remaining budget: {}'.format(symbol))
+            continue
+        if not _send_order(context, symbol, quantity):
+            return False
+        sent_buy = True
+        value = quantity * price
+        # Reserve locally too: the asynchronous engine may not freeze cash yet.
+        cash -= value * 1.005 + 5
+        exposure_room -= value
+    return not sent_buy
+
+
+def run_backtest(start_date='2024-01-01', end_date=None, capital_base=100000):
+    """AIStudio entrypoint. This creates a backtest, not a live broker session."""
+    if end_date is None:
+        end_date = (date.today() - timedelta(days=1)).isoformat()
+    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    if start > end or end >= date.today():
+        raise ValueError('Require start_date <= end_date < today')
+    if not isfinite(capital_base) or capital_base <= 0:
+        raise ValueError('capital_base must be positive and finite')
+    modules = import_module('bigmodule')
+    return modules.M.bigtrader.v30(
+        data={'start_date': start_date, 'end_date': end_date,
+              'market': 'cn_fund', 'instruments': list(ETF_UNIVERSE)},
+        start_date='', end_date='', initialize=initialize, handle_data=handle_data,
+        capital_base=capital_base, frequency='daily', product_type='基金',
+        rebalance_period_type='周度交易日', rebalance_period_days='1',
+        rebalance_period_roll_forward=True, backtest_engine_mode='标准模式',
+        before_start_days=250, volume_limit=0.025,
+        order_price_field_buy='open', order_price_field_sell='open',
+        benchmark='沪深300指数', plot_charts=True,
+    )
+
+
+if __name__ == '__main__':
+    performance = run_backtest()
