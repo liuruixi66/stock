@@ -1,7 +1,9 @@
 
 def validate_ohlc_data(df):
-    """
-    验证OHLC数据质量的完整规则集
+    """检查 OHLCV 结构约束并返回错误、警告和统计信息。
+
+    函数会在传入的 DataFrame 上新增 ``price_change`` 列用于计算波动警告，
+    因此调用方若要求输入保持不变，应先传入副本。
     """
     validation_results = {
         'is_valid': True,
@@ -51,7 +53,7 @@ def validate_ohlc_data(df):
             'violations': negative_volume.index.tolist()
         })
     
-    # 警告规则: 异常价格波动
+    # 极端波动只产生警告，不会把整批数据判为无效。
     df['price_change'] = df['close'].pct_change()
     extreme_changes = df[abs(df['price_change']) > 0.2]  # 20%以上变动
     if len(extreme_changes) > 0:
@@ -75,8 +77,10 @@ def validate_ohlc_data(df):
     return validation_results
 
 def fix_ohlc_violations(df):
-    """
-    修复OHLC数据违规问题
+    """复制并修复 high/low 与开收盘价不一致的记录。
+
+    该函数只修复可由 OHLC 关系确定的高低价，不处理负价格、成交量或
+    极端波动；返回修复后的 DataFrame 以及逐项变更记录。
     """
     df_fixed = df.copy()
     fixes_applied = []

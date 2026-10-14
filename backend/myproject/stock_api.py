@@ -1,6 +1,6 @@
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
-# 已删除 xms_quants_data_client，改用其他数据源
+# 使用本地模拟数据客户端
 import pandas as pd
 import json
 
