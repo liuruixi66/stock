@@ -360,8 +360,9 @@ class BigQuantExportTests(SimpleTestCase):
 
     def test_runner_uses_daily_fund_weekly_next_open_settings(self):
         modules = Mock()
-        with patch.object(adapter, 'import_module', return_value=modules):
+        with patch.object(adapter, 'import_module', return_value=modules) as load:
             adapter.run_backtest('2024-01-01', '2024-08-01', 100000)
+        load.assert_called_once_with('bigquant.bigtrader')
         modules.run.assert_called_once()
         kwargs = modules.run.call_args.kwargs
         self.assertEqual(kwargs['market'], modules.Market.CN_FUND)
