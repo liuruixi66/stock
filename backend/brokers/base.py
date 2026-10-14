@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import os
-from abc import ABC
-from abc import abstractmethod
-from dataclasses import dataclass
-from dataclasses import field
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from decimal import Decimal
 from importlib import import_module
-from typing import TYPE_CHECKING
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from stockmarket.models import SimulationAccount
-    from stockmarket.models import SimulationOrder
+    from stockmarket.models import SimulationAccount, SimulationOrder
 
 
 class BrokerError(RuntimeError):

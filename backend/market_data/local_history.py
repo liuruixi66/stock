@@ -11,10 +11,7 @@ from tempfile import NamedTemporaryFile
 
 from django.conf import settings
 
-from market_data.providers import HistoricalBar
-from market_data.providers import Market
-from market_data.providers import MarketDataError
-from market_data.providers import get_provider
+from .providers import HistoricalBar, Market, MarketDataError, get_provider
 
 
 RESEARCH_START = date(2024, 1, 1)

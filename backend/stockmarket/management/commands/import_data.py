@@ -1,17 +1,11 @@
 from django.core.management.base import BaseCommand
 import pymysql
 from django.conf import settings
-from stockmarket.models import StockSpot
-from stockmarket.models import StockFundFlow
-from stockmarket.models import StockBonus
-from stockmarket.models import StockTop
-from stockmarket.models import StockBlocktrade
-from stockmarket.models import StockFundFlowIndustry
-from stockmarket.models import StockFundFlowConcept
-from stockmarket.models import EtfSpot
-from stockmarket.models import StockChipRaceOpen
-from stockmarket.models import StockChipRaceEnd
-from stockmarket.models import StockLimitupReason
+from stockmarket.models import (
+    StockSpot, StockFundFlow, StockBonus, StockTop, StockBlocktrade,
+    StockFundFlowIndustry, StockFundFlowConcept, EtfSpot,
+    StockChipRaceOpen, StockChipRaceEnd, StockLimitupReason
+)
 
 class Command(BaseCommand):
     help = '从现有MySQL数据库导入数据'

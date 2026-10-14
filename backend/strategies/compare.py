@@ -35,7 +35,7 @@ def equal(a, b):
     """返回 ``a`` 是否等于 ``b``。"""
     return a == b
 """
-strategies.compare.py
+compare.py
 提供基本的比较大小功能
 """
 

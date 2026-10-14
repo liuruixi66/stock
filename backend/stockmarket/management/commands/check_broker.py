@@ -2,11 +2,9 @@
 
 import os
 
-from django.core.management.base import BaseCommand
-from django.core.management.base import CommandError
+from django.core.management.base import BaseCommand, CommandError
 
-from brokers import BrokerError
-from brokers import adapter_class
+from brokers import BrokerError, adapter_class
 from stockmarket.models import SimulationAccount
 
 
