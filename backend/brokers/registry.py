@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from importlib import import_module
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+from typing import Any
 
-from .base import BrokerAdapter, BrokerError
+from brokers.base import BrokerAdapter
+from brokers.base import BrokerError
 
 if TYPE_CHECKING:
     from stockmarket.models import SimulationAccount

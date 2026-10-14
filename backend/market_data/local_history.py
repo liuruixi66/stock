@@ -5,13 +5,19 @@ import json
 import math
 import os
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from django.conf import settings
 
-from .providers import HistoricalBar, Market, MarketDataError, get_provider
+from market_data.providers import HistoricalBar
+from market_data.providers import Market
+from market_data.providers import MarketDataError
+from market_data.providers import get_provider
 
 
 RESEARCH_START = date(2024, 1, 1)

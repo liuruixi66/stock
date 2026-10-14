@@ -1,14 +1,20 @@
 """每日运行一次：用均线交叉状态在模拟/券商账户上调仓，把回测策略搬到模拟盘。"""
 
-from datetime import date, timedelta
+from datetime import date
+from datetime import timedelta
 from decimal import Decimal
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
+from django.core.management.base import CommandError
 
 from brokers import BrokerError
-from market_data import MarketDataError, get_provider
-from stockmarket.models import SimulationAccount, SimulationPosition
-from stockmarket.paper_trading import TradingError, submit_order, sync_account
+from market_data import MarketDataError
+from market_data import get_provider
+from stockmarket.models import SimulationAccount
+from stockmarket.models import SimulationPosition
+from execution.paper_trading import TradingError
+from execution.paper_trading import submit_order
+from execution.paper_trading import sync_account
 
 
 class Command(BaseCommand):

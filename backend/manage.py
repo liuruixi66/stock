@@ -10,7 +10,7 @@ def main():
     stock_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../stock'))
     sys.path.insert(0, stock_path)
     
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

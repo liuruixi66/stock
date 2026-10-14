@@ -4,11 +4,14 @@ import json
 from datetime import date
 from pathlib import Path
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
+from django.core.management.base import CommandError
 
 from market_data import MarketDataError
 from market_data.local_history import LocalHistoryProvider
-from stockmarket.etf_rotation import RotationBar, RotationConfig, build_rotation_targets
+from strategies.etf_rotation import RotationBar
+from strategies.etf_rotation import RotationConfig
+from strategies.etf_rotation import build_rotation_targets
 
 
 class Command(BaseCommand):

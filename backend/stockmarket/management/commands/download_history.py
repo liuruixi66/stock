@@ -1,10 +1,17 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
+from django.core.management.base import CommandError
 
 from market_data import MarketDataError
-from market_data.local_history import RESEARCH_START, RESEARCH_UNIVERSE, available_end, download_history
+from market_data.local_history import RESEARCH_START
+from market_data.local_history import RESEARCH_UNIVERSE
+from market_data.local_history import available_end
+from market_data.local_history import download_history
 
 
 class Command(BaseCommand):

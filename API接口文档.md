@@ -2,7 +2,7 @@
 
 ## BigQuant ETF 研究策略导出与平台接口（2026-10-14）
 
-本节描述独立的平台适配，不新增本系统HTTP接口，不连接券商实盘。完整代码文件为 [bigquant_etf_rotation_v1.py](./bigquant_etf_rotation_v1.py)，适配源代码为 [bigquant_etf_rotation.py](./backend/stockmarket/bigquant_etf_rotation.py)，复用项目的 [ETF规则核心](./backend/stockmarket/etf_rotation.py)。原MACD/KDJ功能不变。
+本节描述独立的平台适配，不新增本系统HTTP接口，不连接券商实盘。完整代码文件为 [bigquant_etf_rotation_v1.py](./bigquant_etf_rotation_v1.py)，适配源代码为 [bigquant_etf_rotation.py](./backend/strategies/platforms/bigquant_etf_rotation.py)，复用项目的 [ETF规则核心](./backend/strategies/etf_rotation.py)。原MACD/KDJ功能不变。
 
 ### 导出与运行
 
@@ -22,7 +22,7 @@
 
 ```powershell
 Push-Location backend
-..\.venv\Scripts\python.exe manage.py test stockmarket.test_bigquant_etf stockmarket.test_etf_rotation stockmarket.test_etf_commands stockmarket.tests.QuantResearchTests --noinput
+..\.venv\Scripts\python.exe manage.py test stockmarket.tests.test_services.test_bigquant_etf stockmarket.tests.test_services.test_etf_rotation stockmarket.tests.test_services.test_etf_commands stockmarket.tests.test_services.QuantResearchTests --noinput
 Pop-Location
 ```
 
