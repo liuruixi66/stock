@@ -6,6 +6,8 @@ from typing import Iterable, Mapping, Sequence
 
 from market_data import HistoricalBar
 
+from .etf_rotation import shrink_to_equal
+
 
 class ResearchError(ValueError):
     """量化研究参数或历史数据不满足要求时抛出的业务异常。"""
@@ -177,11 +179,7 @@ def _entropy_regularized_weights(
         raise ResearchError('entropy_strength 必须在 0 到 1 之间')
     if not weights:
         return {}
-    equal_weight = 1 / len(weights)
-    return {
-        symbol: (1 - strength) * weight + strength * equal_weight
-        for symbol, weight in weights.items()
-    }
+    return shrink_to_equal(weights, strength)
 
 
 def run_portfolio_baseline(
