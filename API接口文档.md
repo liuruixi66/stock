@@ -689,6 +689,92 @@ def run_backtest_api(request):
 
 ---
 
+## 上证50历史前30：差分与LSTM离线研究
+
+本研究与Web接口、ETF轮动及实盘执行分离，不会启动交易或下单。
+来源：<https://arxiv.org/abs/2505.19243>。实现一阶对数差分对照和
+De Prado分数阶差分 + LSTM；不是论文完整复现，也没有实现R的
+ARFIMA/ARTFIMA参数估计。温和化差分递推仅有数学核心及测试。
+
+- 核心：`backend/research/fractional_forecast.py`。
+- 训练：`backend/research/fractional_lstm.py`。
+- 低频下载：`backend/tools/download_fractional_prices.py`。
+- 离线运行：`backend/tools/run_fractional_research.py`。
+- 可选研究依赖：`backend/requirements-research.txt`；没有添加到Web依赖。
+
+### 历史数据约束
+
+指数是**上证50（000016.SHI）**，不是中证A50或A500。按信号日前最近
+完整权重快照取前30，不能用今天的成分倒推过去。权重CSV必须包含：
+
+```text
+date,instrument,member_code,weight
+2024-03-29,000016.SHI,600000.SH,2.0
+```
+
+示例只展示一行格式，不是有效权重数据；每个快照需完整50只、不重复、
+正权重且总和为100或1。默认拒绝超过35天的陈旧快照；缺失或无权限
+必须补授权数据，不能回退到当前成分。供应商快照日期是否对应实际可获知日期，
+仍需由数据使用者核实，程序不能凭日期证明这一点。
+
+行情CSV包含`date,instrument,open,high,low,close,volume`，股票代码如
+`600000.SH`。使用后复权日线，且训练和验证历史不能只提供回测期间。
+AKShare可获取日线，但不自动解决完整历史权重与发布时间问题。
+
+下载器按目标回测区间的历史前30并集串行下载，每次调用起点间隔默认
+至少6秒（可调但不得低于3秒），无并发、无自动重试、不更换代理或绕过封禁。
+失败立即停止；恢复时使用校验过SHA256的逐股票缓存，不重新下载。
+AKShare内部可能发起不止一次HTTP请求，因此这不保证供应商永远不触发限流；
+遇到限流应停止并等待，不能反复启动。后复权成交量单位按来源记录为“手”。
+缓存、下载时间、实际覆盖日期、来源版本、调整方式及文件哈希共同保存。
+仅全部成功后输出合并行情及同名`.metadata.json`；发现残缺缓存会明确失败。
+
+### 运行方式
+
+在`backend`目录运行，先安装可选研究依赖到独立研究环境。
+不要在Web环境盲目升级依赖。Windows当前继承Conda的环境已验证可用
+`MKL_THREADING_LAYER=SEQUENTIAL`避免PyTorch与MKL的重复OpenMP初始化；
+这是进程级配置，不使用不安全的`KMP_DUPLICATE_LIB_OK`。
+
+```powershell
+$env:MKL_THREADING_LAYER='SEQUENTIAL'
+python -m tools.download_fractional_prices --weights E:\data\sse50_weights.csv --cache E:\data\akshare_cache --output E:\data\prices.csv --interval 6
+python -m tools.run_fractional_research --prices E:\data\prices.csv --weights E:\data\sse50_weights.csv --metadata E:\data\prices.metadata.json --output E:\data\fractional_result.json
+```
+
+目录需事先存在。输出文件不覆盖已有实验。非下载器提供的行情也需metadata JSON，
+包含真实`source`、`adjustment: "hfq"`及`prices_sha256`、`weights_sha256`；
+不得通过改声明掩盖不同复权方式或未知来源。
+
+### 切分、模型及判断边界
+
+- 训练2014-01-01至2022-03-31；验证2022-04-01至2024-03-31；
+  样本外2024-04-01至2026-04-30。日期可通过显式CLI参数修改。
+- 序列长度20，ADF网格步长0.05、5%检验、AIC选择滞后，
+  固定宽度权重阈值0.001、上限1000。这些是迁移研究假设，不是论文完整配置。
+- 每股票、每分支独立CPU单层LSTM；hidden16/32、学习率0.001、batch64、
+  默认30 epochs；仅验证损失选择试验和epoch，不用测试收益挑模型。
+  标签按次日日期切分，scaler与差分阶数只用训练期。
+- 特征为因果差分、SMA5/10/20、RSI9/14/21、Bollinger10/2、
+  MACD12/26/9；RSI使用滚动均值、布林方差ddof0、EMA adjust=False。
+  成本带内保留原持仓，是本实现明确的交易约定。
+- 任一需要交易的历史成员缺价、模型历史不足、ADF无合格阶数、
+  预测覆盖不足或持仓无法交易都会明确停止，不以空仓伪装成功。
+- 输出两个研究组合、同池前30固定槽位基线、逐日净值/交易/选股、
+  模型参数/scaler/差分权重/数据哈希。默认资金100000、最多95%仓位，
+  每股票一个1/30槽位，空槽不分给其他股票。
+- 默认买成本0.05%、卖成本0.1%、信号带0.2%，均为研究假设。
+  前日收盘信号最早次日开盘执行。最后持仓按收盘估值、不强制清仓。
+
+**这是后复权价格、连续份额的研究模拟，不是A股真实撮合。**
+未处理100股整数手、最低佣金、T+1、涨跌停、公司行动现金/股份记账及
+税费历史变动，不能拿研究收益直接指导实盘或100元账户。停牌等情况需
+交给平台真实规则验证。即使研究效果好，也需再做BigQuant股票回测，
+当前没有宣称该LSTM策略已部署到BigQuant。
+
+当前功能证据来自合成数据训练、因果/无泄漏/缓存与执行测试，不代表市场盈利。
+历史权重数据仍待补齐；尚未生成2024-2026真实股票收益。
+
 **文档版本**: v1.0.0  
 **最后更新**: 2025-08-04  
 **维护者**: 系统集成团队
