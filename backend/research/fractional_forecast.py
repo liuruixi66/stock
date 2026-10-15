@@ -210,6 +210,39 @@ class HistoricalTopThirty:
         return tuple(sorted(members))
 
 
+class FixedRandomThirty:
+    """Current constituents projected backwards: exploratory, survivorship biased."""
+
+    def __init__(self, manifest: dict):
+        if (manifest.get('mode') != 'current_sse50_random30'
+                or manifest.get('index') != '000016.SHI'
+                or manifest.get('survivorship_bias') is not True):
+            raise DifferencingError('Invalid fixed random universe provenance')
+        self.selection_date = date.fromisoformat(manifest['selection_date'])
+        members = manifest['members']
+        selected = manifest['selected']
+        import random
+        import re
+
+        if (len(members) != 50 or len(set(members)) != 50
+                or any(not isinstance(code, str) or not re.fullmatch(r'\d{6}\.SH', code)
+                       for code in members)
+                or not isinstance(manifest['seed'], int)):
+            raise DifferencingError('Random universe requires 50 unique Shanghai constituents and seed')
+        expected = sorted(random.Random(manifest['seed']).sample(sorted(members), 30))
+        if selected != expected:
+            raise DifferencingError('Selected stocks do not match the saved random seed')
+        self.selected = tuple(selected)
+
+    def at(self, signal_day: date) -> tuple[date, tuple[str, ...]]:
+        return self.selection_date, self.selected
+
+    def members_between(self, start: date, end: date) -> tuple[str, ...]:
+        if start > end:
+            raise DifferencingError('Universe start must not exceed end')
+        return self.selected
+
+
 def long_only_signal(predicted_return: float, previous: bool, threshold: float) -> bool:
     """Equation 47; retain the existing position inside the transaction-cost band."""
     if (not isfinite(predicted_return) or not isfinite(threshold)
@@ -245,7 +278,7 @@ def validate_prices(frame: pd.DataFrame) -> pd.DataFrame:
 
 def simulate_long_only(
     prices: pd.DataFrame, predictions: Mapping[tuple[date, str], float],
-    universe: HistoricalTopThirty, start: date, end: date,
+    universe: HistoricalTopThirty | FixedRandomThirty, start: date, end: date,
     initial_capital: float = 100000, exposure: float = 0.95,
     buy_cost: float = 0.0005, sell_cost: float = 0.001,
     signal_threshold: float = 0.002, benchmark: bool = False,
@@ -342,6 +375,8 @@ def simulate_long_only(
     volatility = float(np.std(returns) * np.sqrt(252))
     return {
         'simulation': 'continuous_adjusted_price_next_open_research_only',
+        'universe_mode': ('current_sse50_random30_survivorship_biased'
+                          if isinstance(universe, FixedRandomThirty) else 'historical_weight_top30'),
         'total_return': float(equity[-1] / initial_capital - 1),
         'annualized_return': float((equity[-1] / initial_capital) ** (252 / len(days)) - 1),
         'max_drawdown': float(np.min(equity / running - 1)),

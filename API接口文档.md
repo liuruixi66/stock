@@ -746,6 +746,55 @@ python -m tools.run_fractional_research --prices E:\data\prices.csv --weights E:
 包含真实`source`、`adjustment: "hfq"`及`prices_sha256`、`weights_sha256`；
 不得通过改声明掩盖不同复权方式或未知来源。
 
+### 当前成分随机30只：探索模式
+
+如暂时没有历史权重，可显式选择当前上证50随机30只。随机种子默认42，
+先保存完整50只来源名单与选出的30只；重启复用该名单，不重新抽样。
+此模式**存在幸存者偏差和成分选择前视偏差**，不能称为历史权重前30回测。
+程序通过独立JSON和结果标记区分两种模式，不伪造历史权重。
+
+```powershell
+python -m tools.download_fractional_prices --fixed-universe E:\data\random30.json --create-random-universe --cache E:\data\akshare_cache --output E:\data\prices.csv --interval 15
+python -m tools.run_fractional_research --fixed-universe E:\data\random30.json --prices E:\data\prices.csv --metadata E:\data\prices.metadata.json --output E:\data\random30_result.json
+```
+
+仅首次需要`--create-random-universe`；也可保留该参数复用已有JSON。
+下载仍从2014年开始以满足训练；上市较晚的股票可能没有足够训练历史，
+不应为追求收益而重新挑选股票。下载失败即停止，无限流重试。
+
+### Yahoo行情备选
+
+下载器增加`--source yahoo`，沿用保存的随机名单，上海代码转换为`.SS`。
+必须用独立缓存和合并输出，不混入AKShare行情：
+
+```powershell
+python -m tools.download_fractional_prices --source yahoo --fixed-universe E:\data\random30.json --cache E:\data\yahoo_cache --output E:\data\yahoo_prices.csv --interval 30
+python -m tools.run_fractional_research --fixed-universe E:\data\random30.json --prices E:\data\yahoo_prices.csv --metadata E:\data\yahoo_prices.metadata.json --output E:\data\yahoo_result.json
+```
+
+Yahoo通过日线chart接口一次请求一只股票，设连接/读取超时10/60秒，
+不自动重试。将每行`Adj Close / Close`因子统一乘到原始OHLC，
+记录为`yahoo_adjclose_ratio`，**不是AKShare的hfq**；成交量保留来源股数。
+复权数据按下载时的供应商口径计算，不是逐历史时点可用的复权快照。
+回测接受此独立复权模式并保留来源信息，仍属连续复权价格研究，非真实撮合。
+缺失日线或复权值、接口错误均停止，不能补零或静默删除。
+Yahoo也可能限流；若失败保留缓存并停止，不更换代理绕过限流。
+
+Yahoo三一重工两行数据已于2026-10-14使用腾讯未复权日线独立核验：
+2019-01-07开盘7.87修正为8.12；2020-09-08开盘22.56修正为22.60、
+最高23.36修正为23.38、成交量72894073修正为74171473股。
+仅当Yahoo原行精确匹配已核验值（浮点容差0.00001）时应用；
+源行变化必须重新核验。修正在复权前进行，收盘未改，保留Yahoo复权因子。
+每股票缓存元数据的`verified_corrections`包含原值、替换值、腾讯原始行、
+查询地址/参数和核验日期；合并元数据与研究结果亦保留记录。
+这不是通用自动清洗，不对其他异常夹紧价格、填零或删除数据。
+
+Yahoo下载可显式增加`--quarantine-invalid`，先保存原始响应（`.raw.json`），
+将价格校验异常记录为`.quarantine.json`，继续采集其他股票。恢复时复用原始
+响应，不重复请求异常股票。隔离记录包含原始响应路径、SHA256和异常原因；
+原始响应仅用于核验，不能用于训练。若任一股票仍被隔离，最终明确失败且不生成
+合并行情，不重抽股票、不按剩余股票偷偷回测。网络错误、HTTP限流仍立即停止。
+
 ### 切分、模型及判断边界
 
 - 训练2014-01-01至2022-03-31；验证2022-04-01至2024-03-31；

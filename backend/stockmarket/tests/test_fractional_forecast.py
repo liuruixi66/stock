@@ -2,6 +2,7 @@ from datetime import date, timedelta
 import hashlib
 import json
 import os
+import random
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -12,12 +13,14 @@ import numpy as np
 import pandas as pd
 
 from research.fractional_forecast import (
-    DifferencingError, ForecastConfig, HistoricalTopThirty, forecast_features,
+    DifferencingError, FixedRandomThirty, ForecastConfig, HistoricalTopThirty, forecast_features,
     fractional_difference, fractional_weights, invert_one_step, long_only_signal,
     simulate_long_only, validate_prices,
 )
 from research.fractional_lstm import LSTMTrial, prepare_sequences, train_stock
-from tools.download_fractional_prices import download
+from tools.download_fractional_prices import (
+    YAHOO_VERIFIED_CORRECTIONS, correct_verified_yahoo_rows, download, yahoo_prices,
+)
 from tools.run_fractional_research import main as run_research
 
 
@@ -162,6 +165,123 @@ class FractionalForecastTests(unittest.TestCase):
 
 
 class DownloadTests(unittest.TestCase):
+    def test_quarantine_collects_remaining_stocks_but_never_combines_invalid_data(self):
+        days = [date(2024, 1, 1), date(2024, 1, 2)]
+
+        def fetch(symbol, start, end, raw_path):
+            raw_path.write_text('{"test_raw": true}', encoding='utf-8')
+            if symbol == '600001.SH':
+                raise DifferencingError('Invalid adjusted OHLCV')
+            return prices(days, [symbol])
+
+        with TemporaryDirectory() as directory, \
+                patch('tools.download_fractional_prices.yahoo_prices', side_effect=fetch) as api, \
+                patch('tools.download_fractional_prices.time.sleep'):
+            root = Path(directory)
+            weights().to_csv(root / 'weights.csv', index=False)
+            with self.assertRaisesRegex(DifferencingError, '29 valid stocks, 1 quarantined'):
+                download(root / 'weights.csv', root / 'cache', root / 'prices.csv',
+                         date(2020, 1, 1), days[-1], universe_start=days[0],
+                         source='yahoo', quarantine_invalid=True)
+            self.assertEqual(api.call_count, 30)
+            self.assertFalse((root / 'prices.csv').exists())
+            self.assertEqual(len(list((root / 'cache').glob('*.quarantine.json'))), 1)
+            self.assertEqual(len(list((root / 'cache').glob('*.raw.json'))), 30)
+
+    def test_verified_corrections_are_exact_scoped_and_audited(self):
+        frame = pd.DataFrame([
+            {'date': day, **values['expected']}
+            for (symbol, day), values in YAHOO_VERIFIED_CORRECTIONS.items()
+        ])
+        self.assertEqual(correct_verified_yahoo_rows(frame.copy(), '600030.SH'), [])
+        original = frame.copy()
+        audit = correct_verified_yahoo_rows(frame, '600031.SH')
+        self.assertEqual(len(audit), 2)
+        self.assertEqual(frame.loc[0, 'open'], 8.12)
+        self.assertEqual(frame.loc[1, 'high'], 23.38)
+        self.assertEqual(frame.loc[1, 'volume'], 74171473)
+        self.assertEqual(audit[0]['original_raw']['open'], 7.87)
+        self.assertEqual(audit[1]['source'], 'tencent.unadjusted_daily')
+        original.loc[0, 'close'] = 9
+        with self.assertRaisesRegex(DifferencingError, 'reverify'):
+            correct_verified_yahoo_rows(original, '600031.SH')
+
+    def test_yahoo_adjusts_all_prices_and_preserves_share_volume(self):
+        payload = {'chart': {'error': None, 'result': [{
+            'meta': {'symbol': '600030.SS', 'currency': 'CNY'},
+            'timestamp': [1704099600, 1704186000],
+            'indicators': {
+                'quote': [{'open': [10, 12], 'high': [11, 13], 'low': [9, 11],
+                           'close': [10, 12], 'volume': [10000, 12000]}],
+                'adjclose': [{'adjclose': [5, 12]}],
+            },
+        }]}}
+        response = Mock()
+        response.json.return_value = payload
+        with patch('tools.download_fractional_prices.requests.get', return_value=response) as get:
+            frame = yahoo_prices('600030.SH', date(2024, 1, 1), date(2024, 1, 2))
+        np.testing.assert_equal(frame['open'].to_numpy(), [5, 12])
+        np.testing.assert_equal(frame['high'].to_numpy(), [5.5, 13])
+        np.testing.assert_equal(frame['volume'].to_numpy(), [10000, 12000])
+        self.assertTrue(get.call_args.args[0].endswith('/600030.SS'))
+        self.assertEqual(get.call_args.kwargs['timeout'], (10, 60))
+        payload['chart']['result'][0]['indicators']['adjclose'][0]['adjclose'][0] = None
+        with patch('tools.download_fractional_prices.requests.get', return_value=response):
+            with self.assertRaisesRegex(DifferencingError, 'adjusted close'):
+                yahoo_prices('600030.SH', date(2024, 1, 1), date(2024, 1, 2))
+
+    def test_yahoo_download_cache_has_separate_source_and_adjustment(self):
+        days = [date(2024, 1, 1), date(2024, 1, 2)]
+        with TemporaryDirectory() as directory, \
+                patch('tools.download_fractional_prices.yahoo_prices',
+                      side_effect=lambda symbol, start, end: prices(days, [symbol])) as fetch, \
+                patch('tools.download_fractional_prices.time.sleep'):
+            root = Path(directory)
+            source = root / 'weights.csv'
+            weights().to_csv(source, index=False)
+            for name in ('first', 'second'):
+                download(source, root / 'cache', root / f'{name}.csv',
+                         date(2020, 1, 1), date(2024, 1, 2),
+                         universe_start=days[0], source='yahoo')
+            self.assertEqual(fetch.call_count, 30)
+            metadata = json.loads((root / 'first.metadata.json').read_text(encoding='utf-8'))
+            self.assertEqual(metadata['source'], 'yahoo.chart')
+            self.assertEqual(metadata['adjustment'], 'yahoo_adjclose_ratio')
+            self.assertEqual(metadata['stocks'][0]['volume_unit'], 'share')
+            self.assertFalse(list((root / 'cache').glob('*_hfq.csv')))
+
+    def test_fixed_random_universe_is_reproducible_and_downloadable(self):
+        members = sorted(weights()['member_code'])
+        manifest = {
+            'mode': 'current_sse50_random30', 'index': '000016.SHI',
+            'selection_date': '2026-10-14', 'seed': 42, 'members': members,
+            'selected': sorted(random.Random(42).sample(members, 30)),
+            'survivorship_bias': True,
+        }
+        universe = FixedRandomThirty(manifest)
+        self.assertEqual(universe.members_between(date(2024, 1, 1), date(2024, 1, 2)),
+                         tuple(manifest['selected']))
+        bad = dict(manifest, selected=members[:30])
+        with self.assertRaises(DifferencingError):
+            FixedRandomThirty(bad)
+        raw = pd.DataFrame({
+            '日期': ['2024-01-01', '2024-01-02'], '开盘': [10, 10], '收盘': [10, 10],
+            '最高': [11, 11], '最低': [9, 9], '成交量': [100, 100],
+        })
+        api = Mock(return_value=raw)
+        with TemporaryDirectory() as directory, patch.dict('sys.modules', {
+            'akshare': SimpleNamespace(stock_zh_a_hist=api, __version__='mock'),
+        }), patch('tools.download_fractional_prices.time.sleep'):
+            root = Path(directory)
+            source = root / 'universe.json'
+            source.write_text(json.dumps(manifest), encoding='utf-8')
+            download(None, root / 'cache', root / 'prices.csv', date(2020, 1, 1),
+                     date(2024, 1, 2), universe_start=date(2024, 1, 1), fixed_universe=source)
+            self.assertEqual(api.call_count, 30)
+            metadata = json.loads((root / 'prices.metadata.json').read_text(encoding='utf-8'))
+            self.assertEqual(metadata['universe_mode'], 'current_sse50_random30_survivorship_biased')
+            self.assertIsNone(metadata['weights_sha256'])
+
     def test_serial_cached_download_uses_hfq_and_never_repeats_request(self):
         raw = pd.DataFrame({
             '日期': ['2024-01-01', '2024-01-02'], '开盘': [10, 10], '收盘': [10, 10],
