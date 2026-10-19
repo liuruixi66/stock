@@ -9,6 +9,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import pandas as pd
+
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase
@@ -21,6 +23,10 @@ from market_data import HistoricalBar, Market, MarketDataError, MinuteBar, Quote
 from market_data.database_history import SQLiteHistoryProvider
 from market_data.local_history import LocalHistoryProvider, download_history
 from research.analytics import build_account_analytics
+from research.database_fractional import load_fractional_database
+from research.fractional_forecast import (
+    DatabaseRandomUniverse, ForecastConfig, simulate_long_only,
+)
 from stockmarket.models import SimulationAccount
 from stockmarket.models import SimulationOrder
 from stockmarket.models import SimulationPosition
@@ -194,6 +200,100 @@ class SQLiteHistoryTests(SimpleTestCase):
                 SQLiteHistoryProvider('A', path).get_history(
                     '999999', date(2025, 1, 1), date(2025, 1, 3),
                 )
+
+
+class FractionalDatabaseTests(SimpleTestCase):
+    def test_loads_reproducible_complete_adjusted_universe_from_sqlite(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'stocks.db'
+            connection = sqlite3.connect(path)
+            try:
+                connection.executescript('''
+                    CREATE TABLE cn_tickers (
+                        symbol TEXT PRIMARY KEY, code TEXT, name TEXT,
+                        exchange TEXT, is_etf INTEGER
+                    );
+                    CREATE TABLE cn_daily (
+                        symbol TEXT, date TEXT, open REAL, high REAL, low REAL,
+                        close REAL, adj_close REAL, volume INTEGER
+                    );
+                ''')
+                for index in range(31):
+                    code = f'{600000 + index:06}'
+                    symbol = f'{code}.SS'
+                    connection.execute(
+                        'INSERT INTO cn_tickers VALUES (?, ?, ?, ?, 0)',
+                        (symbol, code, f'Stock {index}', 'SSE'),
+                    )
+                    for day in range(1, 5):
+                        if index == 30 and day == 4:
+                            continue
+                        price = 10 + day
+                        connection.execute(
+                            'INSERT INTO cn_daily VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                            (
+                                symbol, f'2025-01-{day:02}', price, price, price,
+                                price, price * 2, 1000,
+                            ),
+                        )
+                connection.commit()
+            finally:
+                connection.close()
+
+            config = ForecastConfig(
+                train_start=date(2025, 1, 1),
+                validation_start=date(2025, 1, 2),
+                test_start=date(2025, 1, 3),
+                test_end=date(2025, 1, 4),
+            )
+            first_prices, first_universe, metadata = load_fractional_database(
+                path, config, seed=12,
+            )
+            second_prices, second_universe, _ = load_fractional_database(
+                path, config, seed=12,
+            )
+
+            self.assertEqual(len(first_universe.selected), 30)
+            self.assertEqual(first_universe.selected, second_universe.selected)
+            self.assertNotIn('600030.SH', first_universe.selected)
+            self.assertEqual(len(first_prices), 30 * 4)
+            self.assertEqual(first_prices.iloc[0]['close'], 22)
+            self.assertTrue(first_prices.equals(second_prices))
+            self.assertEqual(metadata['eligible_universe_size'], 30)
+            self.assertEqual(metadata['adjustment'], 'adj_close / close factor applied to OHLC')
+
+    def test_backtest_keeps_database_position_through_zero_volume_session(self) -> None:
+        start = date(2025, 1, 1)
+        prices = [100, 101, 101, 102, 103]
+        volumes = [1000, 1000, 0, 1000, 1000]
+        bars = pd.DataFrame([
+            {
+                'date': start + timedelta(days=index),
+                'instrument': '600001.SH',
+                'open': price,
+                'high': price,
+                'low': price,
+                'close': price,
+                'volume': volume,
+            }
+            for index, (price, volume) in enumerate(zip(prices, volumes))
+        ])
+        universe = DatabaseRandomUniverse(['600001.SH'], start, 42, 1)
+        predictions = {
+            (start + timedelta(days=index), '600001.SH'): 0.1
+            for index in range(1, 4)
+        }
+
+        result = simulate_long_only(
+            bars, predictions, universe, start + timedelta(days=1), start + timedelta(days=4),
+        )
+
+        self.assertEqual(len(result['equity_curve']), 4)
+        self.assertEqual(
+            [trade['date'] for trade in result['trades']],
+            ['2025-01-04', '2025-01-05'],
+        )
+        self.assertEqual(result['universe_mode'], 'database_random_survivorship_biased')
 
 
 class FakeProvider:

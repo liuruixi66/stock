@@ -243,6 +243,34 @@ class FixedRandomThirty:
         return self.selected
 
 
+class DatabaseRandomUniverse:
+    """A reproducible sample of database stocks, projected across the test period."""
+
+    def __init__(
+        self, selected: Sequence[str], selection_date: date, seed: int, eligible_count: int,
+    ):
+        import re
+
+        if (not selected or len(selected) != len(set(selected))
+                or any(not isinstance(code, str) or not re.fullmatch(r'\d{6}\.SH', code)
+                       for code in selected)
+                or isinstance(seed, bool) or not isinstance(seed, int) or seed < 0
+                or eligible_count < len(selected)):
+            raise DifferencingError('Invalid database random-universe selection')
+        self.selected = tuple(sorted(selected))
+        self.selection_date = selection_date
+        self.seed = seed
+        self.eligible_count = eligible_count
+
+    def at(self, signal_day: date) -> tuple[date, tuple[str, ...]]:
+        return self.selection_date, self.selected
+
+    def members_between(self, start: date, end: date) -> tuple[str, ...]:
+        if start > end:
+            raise DifferencingError('Universe start must not exceed end')
+        return self.selected
+
+
 def long_only_signal(predicted_return: float, previous: bool, threshold: float) -> bool:
     """Equation 47; retain the existing position inside the transaction-cost band."""
     if (not isfinite(predicted_return) or not isfinite(threshold)
@@ -278,7 +306,8 @@ def validate_prices(frame: pd.DataFrame) -> pd.DataFrame:
 
 def simulate_long_only(
     prices: pd.DataFrame, predictions: Mapping[tuple[date, str], float],
-    universe: HistoricalTopThirty | FixedRandomThirty, start: date, end: date,
+    universe: HistoricalTopThirty | FixedRandomThirty | DatabaseRandomUniverse,
+    start: date, end: date,
     initial_capital: float = 100000, exposure: float = 0.95,
     buy_cost: float = 0.0005, sell_cost: float = 0.001,
     signal_threshold: float = 0.002, benchmark: bool = False,
@@ -300,26 +329,36 @@ def simulate_long_only(
     days = sorted(day for day in frame['date'].unique() if start <= day <= end)
     if len(days) < 2:
         raise DifferencingError('At least two test trading days are required')
+    database_universe = isinstance(universe, DatabaseRandomUniverse)
     daily = {
         day: rows.set_index('instrument').to_dict('index')
         for day, rows in frame.groupby('date')
     }
     cash = initial_capital
     units: dict[str, float] = {}
+    last_prices: dict[str, float] = {}
     pending = None
     curve, trades, selections = [], [], []
     fees = 0.0
     missing_predictions = 0
     for day in days:
         rows = daily[day]
+        last_prices.update({
+            symbol: item['close'] for symbol, item in rows.items()
+        })
         for symbol in units:
             if symbol not in rows or rows[symbol]['volume'] <= 0:
-                raise DifferencingError(f'No tradeable held price {symbol} on {day}; cannot simulate')
+                if not database_universe:
+                    raise DifferencingError(f'No tradeable held price {symbol} on {day}; cannot simulate')
         if pending is not None:
             origin, targets = pending
             equity_open = cash + sum(quantity * rows[symbol]['open']
+                                     if symbol in rows and rows[symbol]['volume'] > 0
+                                     else quantity * last_prices[symbol]
                                      for symbol, quantity in units.items())
             for symbol in sorted(units):
+                if symbol not in rows or rows[symbol]['volume'] <= 0:
+                    continue
                 target = targets.get(symbol, 0.0) * equity_open
                 value = units[symbol] * rows[symbol]['open']
                 reduction = max(0.0, value - target)
@@ -336,6 +375,8 @@ def simulate_long_only(
                 if weight <= 0:
                     continue
                 if symbol not in rows or rows[symbol]['volume'] <= 0:
+                    if database_universe:
+                        continue
                     raise DifferencingError(f'No tradeable target price {symbol} on {day}')
                 value = units.get(symbol, 0.0) * rows[symbol]['open']
                 increase = min(max(0.0, weight * equity_open - value),
@@ -348,23 +389,31 @@ def simulate_long_only(
                     trades.append({'signal_date': origin.isoformat(), 'date': day.isoformat(),
                                    'instrument': symbol, 'side': 'BUY', 'value': increase,
                                    'cost': cost})
-        equity = cash + sum(quantity * rows[symbol]['close'] for symbol, quantity in units.items())
+        equity = cash + sum(
+            quantity * rows[symbol]['close'] if symbol in rows else quantity * last_prices[symbol]
+            for symbol, quantity in units.items()
+        )
         snapshot_day, candidates = universe.at(day)
         targets = {}
         for symbol in candidates:
             if symbol not in rows:
-                raise DifferencingError(f'No signal-day data for historical top30 member {symbol} on {day}')
-            if benchmark:
+                if not database_universe:
+                    raise DifferencingError(
+                        f'No signal-day data for historical top30 member {symbol} on {day}',
+                    )
+                missing_predictions += 1
+                active = symbol in units
+            elif benchmark:
                 active = True
             elif day == days[-1]:
                 active = symbol in units
             elif (day, symbol) not in predictions:
                 missing_predictions += 1
-                active = False
+                active = symbol in units
             else:
                 active = long_only_signal(predictions[(day, symbol)], symbol in units, signal_threshold)
             if active:
-                targets[symbol] = exposure / 30
+                targets[symbol] = exposure / len(candidates)
         pending = (day, targets)
         selections.append({'date': day.isoformat(), 'weight_date': snapshot_day.isoformat(),
                            'candidates': list(candidates), 'active': list(targets)})
@@ -375,8 +424,11 @@ def simulate_long_only(
     volatility = float(np.std(returns) * np.sqrt(252))
     return {
         'simulation': 'continuous_adjusted_price_next_open_research_only',
-        'universe_mode': ('current_sse50_random30_survivorship_biased'
-                          if isinstance(universe, FixedRandomThirty) else 'historical_weight_top30'),
+        'universe_mode': (
+            'database_random_survivorship_biased' if database_universe else
+            'current_sse50_random30_survivorship_biased'
+            if isinstance(universe, FixedRandomThirty) else 'historical_weight_top30'
+        ),
         'total_return': float(equity[-1] / initial_capital - 1),
         'annualized_return': float((equity[-1] / initial_capital) ** (252 / len(days)) - 1),
         'max_drawdown': float(np.min(equity / running - 1)),
