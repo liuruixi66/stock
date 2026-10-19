@@ -9,6 +9,7 @@ from datetime import date
 from market_data import MarketDataError
 from market_data.database_history import SQLiteHistoryProvider
 from market_data.local_history import LocalHistoryProvider, RESEARCH_START, available_end
+from market_data.providers import MarketDataProvider
 from research.quant_research import (
     run_leaky_integrator_experiment,
     run_portfolio_baseline,
@@ -22,7 +23,7 @@ def default_research_range() -> tuple[date, date]:
     return RESEARCH_START, available_end()
 
 
-def _history_provider(market: str, data_source: str):
+def _history_provider(market: str, data_source: str) -> MarketDataProvider:
     """根据请求的来源选择本地快照或只读 SQLite 行情库。"""
     if data_source == 'snapshot':
         return LocalHistoryProvider(market)

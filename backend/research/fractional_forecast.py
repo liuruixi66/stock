@@ -350,11 +350,11 @@ def simulate_long_only(
     buy_cost: float = 0.0005, sell_cost: float = 0.001,
     signal_threshold: float = 0.002, benchmark: bool = False,
 ) -> dict:
-    """Continuous adjusted-price research portfolio, NOT an A-share fill simulator.
+    """构造连续复权价格研究组合，不是 A 股真实成交模拟器。
 
-    Close-time signals execute no earlier than the next supplied daily open.
-    Thirty fixed allocation slots; unused slots stay cash. Missing/untradeable
-    held prices stop the experiment rather than fabricating a fill.
+    收盘后产生的信号最早只能在输入数据中的下一交易日开盘执行；组合最多使用
+    30 个固定配置槽位，未启用槽位保留为现金。持仓行情缺失或不可交易时停止实验，
+    不伪造成交价。该模型没有模拟整数手、T+1、涨跌停和实际券商撮合。
     """
     prices = validate_prices(prices)
     if (not start <= end or not isfinite(initial_capital) or initial_capital <= 0

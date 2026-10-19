@@ -1,3 +1,10 @@
+"""股票系统 HTTP API 视图。
+
+本模块负责解析 HTTP 参数、校验请求形状并生成 JSON 响应；账户/订单工作流和
+研究回测流程通过 `stockmarket.services` 门面调用，行情查询通过 `market_data`
+公开接口调用，算法与券商适配细节不在视图中重复实现。
+"""
+
 import json
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation

@@ -7,13 +7,13 @@
 from decimal import Decimal
 
 from brokers import BrokerError, broker_catalog
-from execution.paper_trading import live_trading_enabled
 from market_data import MarketDataError, get_provider
 from research.analytics import build_account_analytics
 from stockmarket.models import SimulationAccount, SimulationOrder
 from execution.paper_trading import (
     cancel_order,
     create_account,
+    live_trading_enabled,
     submit_order,
     sync_account,
 )

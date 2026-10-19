@@ -1,10 +1,7 @@
-"""
-WSGI config for config project.
+"""Django WSGI 部署入口。
 
-It exposes the WSGI callable as a module-level variable named ``application``.
-
-For more information on this file, see
-https://docs.djangoproject.com/en/5.1/howto/deployment/wsgi/
+导入本模块时会根据配置创建同步服务器可调用的 `application` 对象，
+供 Gunicorn、uWSGI 等 WSGI 服务器加载。
 """
 
 import os
