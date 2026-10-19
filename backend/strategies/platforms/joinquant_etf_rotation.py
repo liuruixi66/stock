@@ -1,4 +1,9 @@
-"""JoinQuant entrypoints; export with manage.py export_joinquant_etf."""
+"""聚宽平台的 ETF 轮动策略入口。
+
+初始化函数设置平台回测参数，调仓函数使用通用策略计算目标权重，再通过聚宽
+下单接口执行。该适配器的订单行为由聚宽账户环境决定；运行前应确认当前使用的
+是回测、模拟环境还是已授权的实盘环境，并核对标的代码格式。
+"""
 
 from math import isfinite
 
@@ -55,7 +60,8 @@ def rebalance_etfs(context):
                         float(row['low']), float(row['volume']))
             for day, row in frame.iterrows()
         ]
-    # Empty usable data is not evidence of a bearish market.
+    # 没有可用历史数据时不能把“无法计算信号”误判为“市场看空”并清仓；
+    # 直接报错且不提交订单，等待数据恢复后再计算。
     if not histories:
         raise ValueError('No usable ETF histories; no orders submitted')
     result = build_rotation_targets(histories, as_of, g.rotation_config)

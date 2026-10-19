@@ -46,7 +46,7 @@ def add_ma_column(df, window=5, price_col='close', ma_col=None):
     df[ma_col] = df[price_col].rolling(window=window).mean()
     return df
 
-# 示例用法：
-# df = pd.read_csv('xxx.csv')
+# 示例：先读取包含日期和收盘价的行情表，再查询单日均线或批量生成均线列。
+# df = pd.read_csv('行情文件.csv')
 # ma5 = get_ma_on_date(df, '2025-07-31', window=5)
 # df = add_ma_column(df, window=5)

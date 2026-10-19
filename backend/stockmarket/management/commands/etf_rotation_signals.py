@@ -1,4 +1,8 @@
-"""Inspect ETF targets from project frozen OHLCV snapshots; never place orders."""
+"""使用项目冻结的 OHLCV 快照检查 ETF 目标权重，不会提交交易订单。
+
+此命令仅验证研究数据并打印策略结果；它既不连接券商，也不模拟真实撮合。
+若要用于平台回测或交易，必须另行完成数据可用性、交易规则和订单执行验证。
+"""
 
 import json
 from datetime import date

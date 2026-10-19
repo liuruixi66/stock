@@ -23,7 +23,12 @@ def load_fractional_database(
     database_path: Path | str, config: ForecastConfig, seed: int = 42,
     universe_size: int = 30,
 ) -> tuple[pd.DataFrame, DatabaseRandomUniverse, dict]:
-    """Load a complete, reproducible Shanghai-stock sample from stocks.db."""
+    """从 stocks.db 中抽取可复现的沪市股票样本及完整行情。
+
+    先只读扫描数据库，筛出覆盖训练、验证和测试期间且测试数据完整的股票，
+    再依据固定随机种子抽样。返回的样本清单会记录入选股票与筛选元数据，
+    便于复现实验；它仍是按当前数据库构造的研究样本，不代表历史时点真实成分。
+    """
     config.validate()
     if (isinstance(seed, bool) or not isinstance(seed, int) or seed < 0
             or isinstance(universe_size, bool) or not isinstance(universe_size, int)

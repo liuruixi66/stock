@@ -12,7 +12,12 @@ from .providers import HistoricalBar, Market, MarketDataError
 
 
 class SQLiteHistoryProvider:
-    """Read adjusted daily bars from the configured stocks SQLite database."""
+    """从配置的 stocks SQLite 数据库读取复权日线行情。
+
+    A 股和美股分别读取 `cn_daily`、`us_daily` 表；A 股代码会先映射为数据库内部
+    标识。读取采用只读连接，并用复权收盘价相对原始收盘价的比例调整 OHLC，
+    使研究流程能够统一使用复权价格。
+    """
 
     def __init__(self, market: Market | str, database_path: Path | str | None = None) -> None:
         try:

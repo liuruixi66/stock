@@ -19,8 +19,8 @@ SIGNAL_CODES = {
     'new_listing': 6,           # 新上市
     'beijing_exchange': 7,      # 北交所
     'main_board': 8,            # 沪深主板
-    'st': 9,                    # ST
-    'star_st': 10,              # *ST
+    'st': 9,                    # ST 特别处理股票
+    'star_st': 10,              # *ST 退市风险警示股票
     'suspension': 11,           # 停牌
     'science_board': 12,        # 科创板
     'growth_board': 13,         # 创业板
@@ -465,7 +465,7 @@ class SignalLibrary:
                 'timestamp': datetime.now().isoformat(),
                 'trade_date': str(timestamp),
                 'stock_code': stock_code,
-                'action': action,  # 'buy' or 'sell'
+                'action': action,  # 交易方向，取值为 'buy'（买入）或 'sell'（卖出）
                 'signal_type': signal_type,
                 'signal_code': SIGNAL_CODES['buy_signal'] if action == 'buy' else SIGNAL_CODES['sell_signal'],
                 'price': float(data_row.get('CLOSE', 0)),

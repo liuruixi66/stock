@@ -1,4 +1,9 @@
-"""BigTrader daily ETF research adapter; export before uploading to AIStudio."""
+"""BigTrader 每日 ETF 轮动研究适配器。
+
+此文件把通用策略接入 BigQuant 的数据、持仓和下单接口；其中 `run_backtest`
+启动的是平台回测，不是券商实盘连接。平台导出命令会把依赖的通用策略代码
+一并打包，上传前应在目标平台验证数据字段和撮合行为。
+"""
 
 from datetime import date, timedelta
 from importlib import import_module
@@ -126,7 +131,8 @@ def targets_from_fund_frame(
         if len(rows) < config.history_count:
             excluded[symbol] = 'insufficient_history'
             continue
-        # Observed coverage is a conservative seasoning proxy, not listing metadata.
+        # 当前数据表没有可靠的上市日期元数据，因此用实际历史覆盖时长作保守代理；
+        # 这项筛选不能替代交易所或基金发行方提供的正式上市日期。
         if (as_of - rows['date'].iloc[0]).days < 180:
             excluded[symbol] = 'observed_history_under_180_days'
             continue
@@ -222,7 +228,13 @@ def _price_if_active(context: BigQuantContext, data, symbol: str) -> Optional[fl
 
 
 def execute_targets(context: BigQuantContext, data, weights: Dict[str, float]) -> bool:
-    """Return False while reductions/orders remain unresolved; never assume fills."""
+    """按目标权重提交调仓单，并在成交状态未确认时暂停后续买入。
+
+    先检查现有未完成订单、账户资产和持仓，再处理减仓；减仓尚待撮合时返回
+    `False`，避免用尚未到账的卖出资金继续买入。提交买单后会在本地预留现金，
+    防止异步撮合尚未冻结资金时重复超额下单。返回值只表示是否可继续本轮，
+    不代表所有订单都已成交。
+    """
     config = RotationConfig()
     if (any(symbol not in ETF_UNIVERSE or not isfinite(weight)
             or not 0 <= weight <= config.max_weight for symbol, weight in weights.items())
@@ -292,14 +304,15 @@ def execute_targets(context: BigQuantContext, data, weights: Dict[str, float]) -
             return False
         sent_buy = True
         value = quantity * price
-        # Reserve locally too: the asynchronous engine may not freeze cash yet.
+        # 异步撮合引擎可能尚未冻结刚提交订单所需的现金，因此同时更新本地预算；
+        # 这样同一轮循环里的后续买单不会重复使用这笔资金。
         cash -= value * 1.005 + 5
         exposure_room -= value
     return not sent_buy
 
 
 def run_backtest(start_date='2024-01-01', end_date=None, capital_base=100000):
-    """AIStudio entrypoint. This creates a backtest, not a live broker session."""
+    """AIStudio 回测入口：创建平台历史回测，不会建立券商实盘会话或实盘委托。"""
     if end_date is None:
         end_date = (date.today() - timedelta(days=1)).isoformat()
     start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)

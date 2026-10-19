@@ -1,4 +1,9 @@
-"""Legacy database screening service; Django must be initialized by the caller."""
+"""旧版数据库选股与技术指标筛选服务。
+
+该模块依赖 Django 模型和历史指标库，调用前必须由应用入口初始化 Django。
+它保留的是已有数据库筛选逻辑，并非当前 `/api` 路由所注册的新量化研究接口；
+改动时要特别核对数据库字段、指标列名和调用方传入的周期参数。
+"""
 
 from stockmarket.models import StockHistoryData
 from config.paths import BASE_DIR
@@ -1830,4 +1835,3 @@ def compress_stock_results(df, compress_by_stock=True):
             'compression_ratio': 1.0,
             'error': str(e)
         }
-
