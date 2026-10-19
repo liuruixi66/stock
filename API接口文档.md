@@ -67,6 +67,18 @@ Pop-Location
 
 平台运行时延迟加载官方 `dai`、`bigquant.bigtrader`；不使用旧`bigmodule`启动入口，也不使用聚宽的 `jqdata/g/log`。普通本地Python无法直接执行平台回测，不需要为本地测试安装平台私有SDK，也不屏蔽Pylance诊断。
 
+### BigQuant v17 图形流程（仅历史回测）
+
+如果当前 AIStudio 只能使用示例里的 `M.bigtrader.v17` 买卖接口和基础日线数据，可另外导出图形流程版；它不会替换上面的新版适配器：
+
+```powershell
+.\.venv\Scripts\python.exe backend\manage.py export_bigquant_etf_v17 --output .\bigquant_etf_rotation_v17.py
+```
+
+将导出文件完整放入支持 BigQuant 图形模块代码的 AIStudio 环境运行。该版本通过 `M.input_features_dai` 和 `M.extract_data_dai` 读取 `cn_fund_bar1d` 日线字段（`date/instrument/close/high/low/volume/amount`），不要求用户自建信号表，也不在策略回调里直接调用 `dai.query`。信号只使用当前交易日前已经完成的日线数据，卖出不再入选的持仓后，等持仓状态更新再提交买入；买入预算按目标权重和可用现金估算。
+
+v17 示例接口没有新版适配器使用的跨日持久化 `user_store`。此版本用 `context.options` 在单次回测运行内记录每周信号和待成交买卖，不能保证平台逐日重启后的状态恢复，因此定位为历史回测/接口适配示例，不建议用于跨日重启的模拟盘，更不能用于实盘。交易买卖对应 `context.order_target(..., 0)` 和 `context.order_value(...)`；最终是否成交仍以 BigQuant 撮合结果为准。
+
 ### 策略与执行约束
 
 - 池：510300.SH、510500.SH、159915.SZ、588000.SH、512100.SH、512880.SH、512010.SH、512660.SH、515050.SH、518880.SH。
