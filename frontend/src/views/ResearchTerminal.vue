@@ -57,6 +57,14 @@
         </div>
         <div class="parameter-grid">
           <label>股票代码<input v-model="research.symbol" /></label>
+          <label>数据源
+            <select v-model="research.data_source">
+              <option value="snapshot">本地历史快照</option>
+              <option value="database" :disabled="market === 'CRYPTO'">stocks.db（SQLite）</option>
+            </select>
+          </label>
+          <label>开始日期<input v-model="research.start_date" type="date" /></label>
+          <label>结束日期<input v-model="research.end_date" type="date" /></label>
           <label>短周期<input v-model.number="research.short_window" type="number" min="2" /></label>
           <label>长周期<input v-model.number="research.long_window" type="number" min="3" /></label>
           <label>初始资金<input v-model.number="research.initial_cash" type="number" min="1000" /></label>
@@ -219,7 +227,10 @@ const newWatchSymbol = ref('')
 const runs = ref<any[]>([])
 const expandedRunId = ref<number>()
 
-const research = reactive({ symbol: '000001', short_window: 5, long_window: 20, initial_cash: 100000 })
+const research = reactive({
+  symbol: '000001', short_window: 5, long_window: 20, initial_cash: 100000,
+  data_source: 'snapshot', start_date: '2024-01-01', end_date: '2026-09-21',
+})
 const order = reactive<any>({ symbol: '000001', side: 'BUY', quantity: 100, order_type: 'MARKET', price: null })
 const marketAccounts = ref<PaperAccount[]>([])
 let quoteRefreshTimer: ReturnType<typeof setInterval> | undefined
@@ -235,6 +246,7 @@ function formatJson(value: unknown) {
 }
 function switchMarket(value: Market) {
   market.value = value
+  if (value === 'CRYPTO' && research.data_source === 'database') research.data_source = 'snapshot'
   symbols.value = value === 'A' ? '000001,600519' : value === 'US' ? 'AAPL,MSFT' : cryptoSymbols.join(',')
   research.symbol = value === 'A' ? '000001' : value === 'US' ? 'AAPL' : 'BTCUSDT'
   order.symbol = research.symbol

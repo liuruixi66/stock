@@ -7,6 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from brokers import BrokerError, broker_catalog
 from market_data import MarketDataError, get_provider
+from market_data.database_history import SQLiteHistoryProvider
 from market_data.local_history import LocalHistoryProvider, RESEARCH_START, available_end
 from research.analytics import build_account_analytics
 from stockmarket.models import ResearchRun
@@ -23,6 +24,17 @@ from research.quant_research import ResearchError
 from research.quant_research import run_leaky_integrator_experiment
 from research.quant_research import run_portfolio_baseline
 from research.quant_research import run_sma_cross
+
+
+def _research_history_provider(
+    market: str, data: dict,
+) -> LocalHistoryProvider | SQLiteHistoryProvider:
+    source = data.get('data_source', 'snapshot')
+    if source == 'snapshot':
+        return LocalHistoryProvider(market)
+    if source == 'database':
+        return SQLiteHistoryProvider(market)
+    raise MarketDataError(f'Unsupported research data source: {source}')
 
 
 def _account_data(account: SimulationAccount) -> dict:
@@ -275,7 +287,7 @@ def research_backtest(request):
         data = json.loads(request.body or '{}')
         end = date.fromisoformat(data.get('end_date', available_end().isoformat()))
         start = date.fromisoformat(data.get('start_date', RESEARCH_START.isoformat()))
-        provider = LocalHistoryProvider(data.get('market', 'A'))
+        provider = _research_history_provider(data.get('market', 'A'), data)
         bars = provider.get_history(data['symbol'], start, end)
         result = run_sma_cross(
             bars=bars,
@@ -302,6 +314,7 @@ def research_backtest(request):
                 'initial_cash': float(data.get('initial_cash', 100000)),
                 'commission_rate': float(data.get('commission_rate', 0.0003)),
                 'slippage_bps': float(data.get('slippage_bps', 2)),
+                'data_source': data.get('data_source', 'snapshot'),
                 'datasets': provider.datasets,
             },
             start_date=start,
@@ -336,7 +349,7 @@ def portfolio_backtest(request):
         start = date.fromisoformat(data.get('start_date', RESEARCH_START.isoformat()))
         if start > end:
             return JsonResponse({'success': False, 'error': '开始日期不能晚于结束日期'}, status=400)
-        provider = LocalHistoryProvider(market)
+        provider = _research_history_provider(market, data)
         bars_by_symbol = {
             symbol: provider.get_history(symbol, start, end)
             for symbol in symbols
@@ -384,7 +397,7 @@ def leaky_forecast_experiment(request):
             gamma_values = [float(item.strip()) for item in raw_gamma_values.split(',') if item.strip()]
         else:
             gamma_values = [float(item) for item in raw_gamma_values]
-        provider = LocalHistoryProvider(market)
+        provider = _research_history_provider(market, data)
         bars = provider.get_history(symbol, start, end)
         result = run_leaky_integrator_experiment(
             bars=bars,

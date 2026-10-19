@@ -23,6 +23,10 @@ try:
 except ImportError:
     pass
 
+STOCKS_DATABASE_PATH = os.getenv(
+    'STOCKS_DATABASE_PATH', r'E:\股票数据集\data\stocks.db',
+)
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/

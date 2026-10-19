@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import sys
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -17,6 +18,7 @@ from brokers import AccountSnapshot, BrokerAdapter, BrokerError, OrderResult, Po
 from brokers.futu_broker import FutuBroker, from_futu_symbol, to_futu_symbol
 from brokers.qmt_broker import from_qmt_symbol, to_qmt_symbol
 from market_data import HistoricalBar, Market, MarketDataError, MinuteBar, Quote
+from market_data.database_history import SQLiteHistoryProvider
 from market_data.local_history import LocalHistoryProvider, download_history
 from research.analytics import build_account_analytics
 from stockmarket.models import SimulationAccount
@@ -124,6 +126,74 @@ class LocalHistoryTests(SimpleTestCase):
             with self.assertRaises(MarketDataError):
                 download_history('US', 'AAPL', date(2024, 1, 1), date(2099, 1, 1), root)
             remote.assert_not_called()
+
+
+class SQLiteHistoryTests(SimpleTestCase):
+    def _database(self, path: Path) -> None:
+        connection = sqlite3.connect(path)
+        try:
+            connection.executescript('''
+                CREATE TABLE cn_tickers (symbol TEXT PRIMARY KEY, code TEXT);
+                CREATE TABLE cn_daily (
+                    symbol TEXT, date TEXT, open REAL, high REAL, low REAL,
+                    close REAL, adj_close REAL, volume INTEGER
+                );
+                CREATE TABLE us_daily (
+                    symbol TEXT, date TEXT, open REAL, high REAL, low REAL,
+                    close REAL, adj_close REAL, volume INTEGER
+                );
+                INSERT INTO cn_tickers VALUES ('000001.SZ', '000001');
+                INSERT INTO cn_daily VALUES
+                    ('000001.SZ', '2025-01-02', 10, 12, 9, 11, 5.5, 1000),
+                    ('000001.SZ', '2025-01-03', 11, 13, 10, 12, 6, 1200);
+                INSERT INTO us_daily VALUES
+                    ('AAPL', '2025-01-02', 10, 12, 9, 11, NULL, 1000);
+            ''')
+        finally:
+            connection.close()
+
+    def test_reads_adjusted_bars_from_database_read_only(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'stocks.db'
+            self._database(path)
+            provider = SQLiteHistoryProvider('A', path)
+
+            bars = provider.get_history(
+                '000001.SZ', date(2025, 1, 1), date(2025, 1, 4),
+            )
+
+            self.assertEqual([bar.close for bar in bars], [5.5, 6.0])
+            self.assertEqual((bars[0].open, bars[0].high, bars[0].low), (5.0, 6.0, 4.5))
+            self.assertEqual(provider.datasets['000001']['symbol'], '000001.SZ')
+            self.assertEqual(provider.datasets['000001']['bar_count'], 2)
+            connection = sqlite3.connect(f'{path.as_uri()}?mode=ro', uri=True)
+            try:
+                with self.assertRaises(sqlite3.OperationalError):
+                    connection.execute("INSERT INTO cn_tickers VALUES ('600519.SS', '600519')")
+            finally:
+                connection.close()
+
+    def test_resolves_us_symbols_and_reports_missing_adjustment_values(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'stocks.db'
+            self._database(path)
+            provider = SQLiteHistoryProvider('US', path)
+
+            bars = provider.get_history('aapl', date(2025, 1, 1), date(2025, 1, 3))
+
+            self.assertEqual(bars[0].close, 11)
+            self.assertEqual(provider.datasets['AAPL']['missing_adjusted_close_count'], 1)
+
+    def test_rejects_unsupported_market_and_missing_database_symbol(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'stocks.db'
+            self._database(path)
+            with self.assertRaisesRegex(MarketDataError, 'A and US'):
+                SQLiteHistoryProvider('CRYPTO', path)
+            with self.assertRaisesRegex(MarketDataError, 'not found'):
+                SQLiteHistoryProvider('A', path).get_history(
+                    '999999', date(2025, 1, 1), date(2025, 1, 3),
+                )
 
 
 class FakeProvider:
@@ -461,6 +531,52 @@ class BrokerSymbolMappingTests(SimpleTestCase):
 
 
 class MarketHistoryApiTests(TestCase):
+    def test_research_backtest_reads_the_configured_stocks_database(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'stocks.db'
+            connection = sqlite3.connect(path)
+            try:
+                connection.executescript('''
+                    CREATE TABLE cn_tickers (symbol TEXT PRIMARY KEY, code TEXT);
+                    CREATE TABLE cn_daily (
+                        symbol TEXT, date TEXT, open REAL, high REAL, low REAL,
+                        close REAL, adj_close REAL, volume INTEGER
+                    );
+                    INSERT INTO cn_tickers VALUES ('000001.SZ', '000001');
+                ''')
+                connection.executemany(
+                    'INSERT INTO cn_daily VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                    [
+                        ('000001.SZ', f'2025-01-{day:02}', 10 + day, 11 + day,
+                         9 + day, 10 + day, 5 + day / 2, 1000)
+                        for day in range(1, 21)
+                    ],
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.settings(STOCKS_DATABASE_PATH=path):
+                response = self.client.post(
+                    reverse('research_backtest'),
+                    data={
+                        'market': 'A',
+                        'symbol': '000001',
+                        'data_source': 'database',
+                        'start_date': '2025-01-01',
+                        'end_date': '2025-01-20',
+                        'short_window': 2,
+                        'long_window': 3,
+                    },
+                    content_type='application/json',
+                )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        result = response.json()['data']
+        self.assertEqual(result['data_source'], 'SQLiteHistoryProvider')
+        self.assertEqual(result['datasets']['000001']['bar_count'], 20)
+        self.assertEqual(result['historical_data'][0]['close'], 5.5)
+
     @patch('api.trading_views.get_provider')
     def test_history_endpoint_returns_normalized_remote_bars(self, get_provider_mock) -> None:
         class HistoryProvider:
