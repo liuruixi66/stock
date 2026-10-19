@@ -246,9 +246,13 @@ class FractionalDatabaseTests(SimpleTestCase):
                 test_start=date(2025, 1, 3),
                 test_end=date(2025, 1, 4),
             )
-            first_prices, first_universe, metadata = load_fractional_database(
-                path, config, seed=12,
-            )
+            with self.assertLogs('research.database_fractional', level='INFO') as progress:
+                first_prices, first_universe, metadata = load_fractional_database(
+                    path, config, seed=12,
+                )
+            self.assertTrue(any('Reading database read-only' in line for line in progress.output))
+            self.assertTrue(any('Database ready: 30 stocks, 120 rows' in line
+                                for line in progress.output))
             second_prices, second_universe, _ = load_fractional_database(
                 path, config, seed=12,
             )

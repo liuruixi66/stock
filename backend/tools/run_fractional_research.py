@@ -3,6 +3,7 @@
 import argparse
 from datetime import date
 import json
+import logging
 from pathlib import Path
 
 from config.settings import STOCKS_DATABASE_PATH
@@ -88,8 +89,9 @@ def run(args) -> dict:
             'Database adjusted-close ratios are applied to OHLC prices.',
             'De Prado and first-difference branches only; no ARFIMA/ARTFIMA R estimator replication.',
             'ADF grid 0.05, truncation 0.001, AIC lag selection are disclosed implementation settings.',
-            'Single-layer CPU PyTorch LSTM; hidden16/32, best validation epoch, no test-time fitting.',
-            'Training, validation and test dates are recorded in parameters.',
+            'Single-layer PyTorch LSTM; CUDA GPU 0 first, GPU 0+1 after single-GPU OOM, CPU only when CUDA is unavailable.',
+            'Hidden16/32, best validation epoch, no test-time fitting.',
+            'The test interval is ten years by default; exact split dates are recorded in parameters.',
             'Daily equal allocation slots; no reallocation of inactive slots, 95% max exposure.',
             'Research costs cannot replace actual A-share commissions or execution rules.',
             'Only a research simulator; actual stock execution must be validated separately.',
@@ -98,6 +100,7 @@ def run(args) -> dict:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         '--database', type=Path, default=STOCKS_DATABASE_PATH,
@@ -106,10 +109,10 @@ def main() -> None:
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--universe-size', type=int, default=30)
-    parser.add_argument('--train-start', type=date.fromisoformat, default=date(2014, 1, 1))
-    parser.add_argument('--validation-start', type=date.fromisoformat, default=date(2022, 4, 1))
-    parser.add_argument('--test-start', type=date.fromisoformat, default=date(2024, 4, 1))
-    parser.add_argument('--test-end', type=date.fromisoformat, default=date(2026, 4, 30))
+    parser.add_argument('--train-start', type=date.fromisoformat, default=date(2006, 10, 16))
+    parser.add_argument('--validation-start', type=date.fromisoformat, default=date(2014, 10, 14))
+    parser.add_argument('--test-start', type=date.fromisoformat, default=date(2016, 10, 14))
+    parser.add_argument('--test-end', type=date.fromisoformat, default=date(2026, 10, 14))
     parser.add_argument('--capital', type=float, default=100000)
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--buy-cost', type=float, default=0.0005)

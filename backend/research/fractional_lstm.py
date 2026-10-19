@@ -90,9 +90,6 @@ def train_stock(
     frame: pd.DataFrame, config: ForecastConfig, method: str,
     trials: Sequence[LSTMTrial] | None = None, seed: int = 42,
 ) -> tuple[dict, dict[tuple[date, str], float]]:
-    import torch
-    from torch import nn
-
     config.validate()
     frame = validate_prices(frame)
     frame = frame[(frame['date'] >= config.train_start) & (frame['date'] <= config.test_end)]
@@ -117,9 +114,20 @@ def train_stock(
         raise DifferencingError('At least one explicit LSTM trial is required')
     for trial in trials:
         trial.validate()
+
+    import os
+
+    # Load statsmodels before PyTorch to avoid conflicting Intel OpenMP runtimes.
+    # Deterministic CUDA matrix operations also require this before CUDA initializes.
+    os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
+    import torch
+    from torch import nn
+
     torch.set_num_threads(1)
     torch.use_deterministic_algorithms(True)
-    # Disable platform-specific fused recurrent kernels for reproducible CPU research.
+    gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    device = torch.device('cuda:0' if gpu_count else 'cpu')
+
     class Network(nn.Module):
         def __init__(self, features: int, hidden: int):
             super().__init__()
@@ -134,38 +142,90 @@ def train_stock(
     train_indices = torch.from_numpy(np.flatnonzero(data['train']))
     validation_indices = torch.from_numpy(np.flatnonzero(data['validation']))
     loss_function = nn.MSELoss()
-    best_model = None
-    best_loss = float('inf')
-    best_metadata = None
-    results = []
-    for trial_index, trial in enumerate(trials):
-        torch.manual_seed(seed)
-        model = Network(x.shape[-1], trial.hidden_size)
-        optimizer = torch.optim.Adam(model.parameters(), lr=trial.learning_rate)
-        for epoch in range(trial.epochs):
-            model.train()
-            for batch in train_indices.split(trial.batch_size):
-                optimizer.zero_grad()
-                loss = loss_function(model(x[batch]), y[batch])
-                if not torch.isfinite(loss):
-                    raise DifferencingError(f'Non-finite training loss for {symbol}')
-                loss.backward()
-                optimizer.step()
-            model.eval()
-            with torch.no_grad():
-                validation_loss = float(loss_function(
-                    model(x[validation_indices]), y[validation_indices],
-                ))
-            if not np.isfinite(validation_loss):
-                raise DifferencingError(f'Non-finite validation loss for {symbol}')
-            if validation_loss < best_loss:
-                best_loss = validation_loss
-                best_metadata = {'trial_index': trial_index, 'epoch': epoch + 1, **asdict(trial)}
-                best_model = {name: value.detach().clone() for name, value in model.state_dict().items()}
-        results.append({'trial': asdict(trial), 'last_validation_mse_scaled': validation_loss})
+
+    def fit(use_data_parallel: bool) -> tuple[dict, float, dict, list]:
+        best_state = None
+        best_validation_loss = float('inf')
+        selected_trial = None
+        trial_results = []
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+        for trial_index, trial in enumerate(trials):
+            torch.manual_seed(seed)
+            model = Network(x.shape[-1], trial.hidden_size).to(device)
+            if use_data_parallel:
+                model = nn.DataParallel(model, device_ids=[0, 1])
+            optimizer = torch.optim.Adam(model.parameters(), lr=trial.learning_rate)
+            for epoch in range(trial.epochs):
+                model.train()
+                for batch in train_indices.split(trial.batch_size):
+                    inputs = x[batch]
+                    if device.type == 'cuda' and not use_data_parallel:
+                        inputs = inputs.to(device)
+                    targets = y[batch].to(device)
+                    optimizer.zero_grad()
+                    loss = loss_function(model(inputs), targets)
+                    if not torch.isfinite(loss):
+                        raise DifferencingError(f'Non-finite training loss for {symbol}')
+                    loss.backward()
+                    optimizer.step()
+                model.eval()
+                validation_inputs = x[validation_indices]
+                if device.type == 'cuda' and not use_data_parallel:
+                    validation_inputs = validation_inputs.to(device)
+                with torch.no_grad():
+                    validation_loss = float(loss_function(
+                        model(validation_inputs), y[validation_indices].to(device),
+                    ).item())
+                if not np.isfinite(validation_loss):
+                    raise DifferencingError(f'Non-finite validation loss for {symbol}')
+                if validation_loss < best_validation_loss:
+                    best_validation_loss = validation_loss
+                    selected_trial = {
+                        'trial_index': trial_index, 'epoch': epoch + 1, **asdict(trial),
+                    }
+                    unwrapped = model.module if isinstance(model, nn.DataParallel) else model
+                    best_state = {
+                        name: value.detach().cpu().clone()
+                        for name, value in unwrapped.state_dict().items()
+                    }
+            trial_results.append({
+                'trial': asdict(trial),
+                'last_validation_mse_scaled': validation_loss,
+            })
+        if best_state is None or selected_trial is None:
+            raise DifferencingError('No trained model selected')
+        return best_state, best_validation_loss, selected_trial, trial_results
+
+    used_data_parallel = False
+    gpu_oom_fallback = False
+    if gpu_count:
+        try:
+            best_model, best_loss, best_metadata, results = fit(use_data_parallel=False)
+        except torch.cuda.OutOfMemoryError as exc:
+            if gpu_count < 2:
+                raise DifferencingError(
+                    'LSTM ran out of memory on the single available GPU; '
+                    'configure two visible CUDA GPUs or reduce the batch size',
+                ) from exc
+            gpu_oom_fallback = True
+        if gpu_oom_fallback:
+            # Leave the exception handler first so its traceback releases failed-run tensors.
+            torch.cuda.empty_cache()
+            try:
+                best_model, best_loss, best_metadata, results = fit(use_data_parallel=True)
+                used_data_parallel = True
+            except torch.cuda.OutOfMemoryError as fallback_exc:
+                raise DifferencingError(
+                    'LSTM ran out of memory using both available GPUs; '
+                    'reduce the batch size or model size',
+                ) from fallback_exc
+    else:
+        best_model, best_loss, best_metadata, results = fit(use_data_parallel=False)
+
     if best_model is None or best_metadata is None:
         raise DifferencingError('No trained model selected')
-    model = Network(x.shape[-1], best_metadata['hidden_size'])
+    model = Network(x.shape[-1], best_metadata['hidden_size']).to(device)
     model.load_state_dict(best_model)
     model.eval()
     forecast_indices = np.flatnonzero(data['test'])
@@ -175,7 +235,7 @@ def train_stock(
         for batch in np.array_split(forecast_indices, max(1, len(forecast_indices) // 128 + 1)):
             if not len(batch):
                 continue
-            output = model(x[torch.from_numpy(batch)]).numpy()
+            output = model(x[torch.from_numpy(batch)].to(device)).detach().cpu().numpy()
             differences = output * data['y_scale'] + data['y_mean']
             for index, prediction in zip(batch, differences):
                 origin = int(data['origins'][index])
@@ -193,6 +253,11 @@ def train_stock(
         'selected_model': best_metadata, 'validation_mse_scaled': best_loss,
         'test_return_mae': float(np.mean(price_errors)) if price_errors else None,
         'trials': results, 'seed': seed,
+        'training_device': str(device),
+        'visible_gpu_count': gpu_count,
+        'gpu_names': [torch.cuda.get_device_name(index) for index in range(gpu_count)],
+        'data_parallel_gpus': [0, 1] if used_data_parallel else [],
+        'gpu_oom_fallback': gpu_oom_fallback,
         'model': {name: tensor.tolist() for name, tensor in best_model.items()},
         'scaler': {
             'x_mean': data['x_mean'].tolist(), 'x_scale': data['x_scale'].tolist(),

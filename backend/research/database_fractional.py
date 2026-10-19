@@ -3,16 +3,20 @@ from __future__ import annotations
 from datetime import date
 import hashlib
 import json
+import logging
 from pathlib import Path
 import random
 import re
 import sqlite3
+from time import monotonic
 
 import pandas as pd
 
 from research.fractional_forecast import (
     DatabaseRandomUniverse, DifferencingError, ForecastConfig, validate_prices,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def load_fractional_database(
@@ -31,9 +35,24 @@ def load_fractional_database(
         raise DifferencingError(f'Stocks database not found: {path}')
 
     uri = f'{path.as_uri()}?mode=ro'
+    started = monotonic()
+    last_report = started
+    phase = 'Checking complete-history stock eligibility'
+
+    def report_query_progress() -> int:
+        nonlocal last_report
+        now = monotonic()
+        if now - last_report >= 10:
+            logger.info('%s: SQLite query still running (%.0fs elapsed)', phase, now - started)
+            last_report = now
+        return 0
+
+    logger.info('Reading database read-only: %s', path)
+    logger.info('%s; this scans historical prices before GPU training starts', phase)
     try:
         connection = sqlite3.connect(uri, uri=True)
         try:
+            connection.set_progress_handler(report_query_progress, 100000)
             candidates = connection.execute(
                 '''
                 WITH market_days AS (
@@ -103,6 +122,10 @@ def load_fractional_database(
                 )
 
             selected = sorted(random.Random(seed).sample(eligible, universe_size))
+            logger.info('Found %d eligible stocks; selected %d with seed %d',
+                        len(eligible), len(selected), seed)
+            phase = 'Loading selected stock prices'
+            logger.info('%s', phase)
             symbols = [symbol for symbol, _, _ in selected]
             placeholders = ','.join('?' for _ in symbols)
             rows = connection.execute(
@@ -122,6 +145,7 @@ def load_fractional_database(
         raise DifferencingError(f'Unable to read stocks database: {exc}') from exc
 
     records = []
+    logger.info('Adjusting and validating %d price rows', len(rows))
     for code, day, open_price, high, low, close, adjusted_close, volume in rows:
         factor = float(adjusted_close) / float(close)
         records.append({
@@ -161,4 +185,6 @@ def load_fractional_database(
         'selected_prices_sha256': price_digest,
         'survivorship_bias': True,
     }
+    logger.info('Database ready: %d stocks, %d rows, %.1fs elapsed',
+                len(selected), len(prices), monotonic() - started)
     return prices, universe, metadata
