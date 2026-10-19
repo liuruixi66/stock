@@ -12,6 +12,7 @@ from research.fractional_forecast import (
     DifferencingError, ForecastConfig, simulate_long_only,
 )
 from research.fractional_lstm import LSTMTrial, train_stock
+from research.fractional_results import chinese_result
 
 
 def run(args) -> dict:
@@ -65,8 +66,8 @@ def run(args) -> dict:
         'paper': 'https://arxiv.org/abs/2505.19243',
         'status': 'method_migration_not_exact_replication',
         'universe': (
-            f"Seeded random sample of {args.universe_size} complete-history "
-            f"Shanghai non-ETF stocks from stocks.db; survivorship biased, not SSE50."
+            f"从stocks.db按固定随机种子抽取{args.universe_size}只具有完整历史的上海非ETF股票；"
+            f"存在幸存者偏差，并非上证50。"
         ),
         'data_provenance': provenance,
         'inputs': {'database': provenance},
@@ -76,6 +77,7 @@ def run(args) -> dict:
             'test_start': config.test_start.isoformat(),
             'test_end': config.test_end.isoformat(),
             'seed': args.seed,
+            'model_seed': 42,
             'universe_size': args.universe_size,
             'buy_cost': args.buy_cost,
             'sell_cost': args.sell_cost,
@@ -83,6 +85,13 @@ def run(args) -> dict:
             'initial_capital': args.capital,
         },
         'models': models,
+        'forecasts': {
+            method: [
+                {'date': day.isoformat(), 'instrument': symbol, 'predicted_return': value}
+                for (day, symbol), value in sorted(forecasts.items())
+            ]
+            for method, forecasts in predictions.items()
+        },
         'backtests': runs,
         'deviations': [
             'A seeded sample from the database replaces historical SSE50 membership; the sample has survivorship bias.',
@@ -122,7 +131,7 @@ def main() -> None:
     try:
         result = run(args)
         with args.output.open('x', encoding='utf-8') as output:
-            json.dump(result, output, ensure_ascii=False, allow_nan=False, indent=2)
+            json.dump(chinese_result(result), output, ensure_ascii=False, allow_nan=False, indent=2)
     except (OSError, ValueError, ImportError) as exc:
         parser.exit(1, f'Research stopped: {exc}\n')
     print(f'Research result: {args.output}')
