@@ -5,53 +5,29 @@ from decimal import Decimal, InvalidOperation
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from brokers import BrokerError, broker_catalog
+from brokers import BrokerError
 from market_data import MarketDataError, get_provider
-from market_data.database_history import SQLiteHistoryProvider
-from market_data.local_history import LocalHistoryProvider, RESEARCH_START, available_end
-from research.analytics import build_account_analytics
 from stockmarket.models import ResearchRun
 from stockmarket.models import SimulationAccount
 from stockmarket.models import SimulationOrder
 from stockmarket.models import WatchlistItem
 from execution.paper_trading import TradingError
-from execution.paper_trading import cancel_order
-from execution.paper_trading import create_account
-from execution.paper_trading import live_trading_enabled
-from execution.paper_trading import submit_order
-from execution.paper_trading import sync_account
 from research.quant_research import ResearchError
-from research.quant_research import run_leaky_integrator_experiment
-from research.quant_research import run_portfolio_baseline
-from research.quant_research import run_sma_cross
-
-
-def _research_history_provider(
-    market: str, data: dict,
-) -> LocalHistoryProvider | SQLiteHistoryProvider:
-    source = data.get('data_source', 'snapshot')
-    if source == 'snapshot':
-        return LocalHistoryProvider(market)
-    if source == 'database':
-        return SQLiteHistoryProvider(market)
-    raise MarketDataError(f'Unsupported research data source: {source}')
-
-
-def _account_data(account: SimulationAccount) -> dict:
-    return {
-        'id': account.id,
-        'name': account.name,
-        'market': account.market,
-        'currency': account.currency,
-        'initial_cash': float(account.initial_cash),
-        'cash': float(account.cash),
-        'broker': account.broker,
-        'broker_label': account.get_broker_display(),
-        'broker_account_id': account.broker_account_id,
-        'trading_mode': account.trading_mode,
-        'is_external': account.is_external,
-        'last_synced_at': account.last_synced_at.isoformat() if account.last_synced_at else None,
-    }
+from stockmarket.services import (
+    account_analytics as build_account_analytics,
+    account_data,
+    account_summary as build_account_summary,
+    cancel_account_order,
+    create_trading_account,
+    default_research_range,
+    order_data,
+    place_account_order,
+    run_leaky_forecast_research,
+    run_portfolio_research,
+    run_sma_research,
+    sync_trading_account,
+    trading_capabilities,
+)
 
 
 def market_quotes(request):
@@ -127,12 +103,12 @@ def market_minute_data(request):
 @csrf_exempt
 def accounts(request):
     if request.method == 'GET':
-        return JsonResponse({'success': True, 'data': [_account_data(item) for item in SimulationAccount.objects.all()]})
+        return JsonResponse({'success': True, 'data': [account_data(item) for item in SimulationAccount.objects.all()]})
     if request.method != 'POST':
         return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
     try:
         data = json.loads(request.body or '{}')
-        account = create_account(
+        account = create_trading_account(
             data.get('name', '').strip(),
             data.get('market', 'A'),
             Decimal(str(data.get('initial_cash', 100000))),
@@ -140,17 +116,14 @@ def accounts(request):
             broker_account_id=str(data.get('broker_account_id', '') or ''),
             trading_mode=str(data.get('trading_mode', 'PAPER')),
         )
-        return JsonResponse({'success': True, 'data': _account_data(account)}, status=201)
+        return JsonResponse({'success': True, 'data': account_data(account)}, status=201)
     except (ValueError, InvalidOperation, TradingError) as exc:
         return JsonResponse({'success': False, 'error': str(exc)}, status=400)
 
 
 def brokers(request):
     """列出可用券商通道及其 SDK/环境变量要求，供前端建账时选择。"""
-    return JsonResponse({'success': True, 'data': {
-        'brokers': broker_catalog(),
-        'live_trading_enabled': live_trading_enabled(),
-    }})
+    return JsonResponse({'success': True, 'data': trading_capabilities()})
 
 
 @csrf_exempt
@@ -159,35 +132,12 @@ def account_sync(request, account_id: int):
     if request.method != 'POST':
         return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
     try:
-        account = SimulationAccount.objects.get(pk=account_id)
+        account = sync_trading_account(account_id)
     except SimulationAccount.DoesNotExist:
         return JsonResponse({'success': False, 'error': '账户不存在'}, status=404)
-    try:
-        sync_account(account)
     except BrokerError as exc:
         return JsonResponse({'success': False, 'error': str(exc)}, status=502)
-    return JsonResponse({'success': True, 'data': _account_data(account)})
-
-
-def _order_data(item: SimulationOrder) -> dict:
-    return {
-        'id': item.id,
-        'account_id': item.account_id,
-        'symbol': item.symbol,
-        'side': item.side,
-        'order_type': item.order_type,
-        'quantity': float(item.quantity),
-        'filled_quantity': float(item.filled_quantity),
-        'requested_price': float(item.requested_price) if item.requested_price is not None else None,
-        'executed_price': float(item.executed_price) if item.executed_price is not None else None,
-        'amount': float(item.executed_price * item.quantity) if item.executed_price is not None else None,
-        'commission': float(item.commission),
-        'tax': float(item.tax),
-        'status': item.status,
-        'broker_order_id': item.broker_order_id,
-        'message': item.message,
-        'created_at': item.created_at.isoformat(),
-    }
+    return JsonResponse({'success': True, 'data': account_data(account)})
 
 
 @csrf_exempt
@@ -196,12 +146,12 @@ def orders(request):
         queryset = SimulationOrder.objects.select_related('account')
         if request.GET.get('account_id'):
             queryset = queryset.filter(account_id=request.GET['account_id'])
-        return JsonResponse({'success': True, 'data': [_order_data(item) for item in queryset[:200]]})
+        return JsonResponse({'success': True, 'data': [order_data(item) for item in queryset[:200]]})
     if request.method != 'POST':
         return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
     try:
         data = json.loads(request.body or '{}')
-        order = submit_order(
+        order = place_account_order(
             account_id=int(data['account_id']),
             symbol=data['symbol'],
             side=data['side'],
@@ -209,7 +159,7 @@ def orders(request):
             order_type=data.get('order_type', 'MARKET'),
             requested_price=Decimal(str(data['price'])) if data.get('price') is not None else None,
         )
-        return JsonResponse({'success': order.status != 'REJECTED', 'data': _order_data(order)}, status=201)
+        return JsonResponse({'success': order.status != 'REJECTED', 'data': order_data(order)}, status=201)
     except (KeyError, ValueError, InvalidOperation, TradingError, SimulationAccount.DoesNotExist) as exc:
         return JsonResponse({'success': False, 'error': str(exc)}, status=400)
 
@@ -219,63 +169,30 @@ def order_cancel(request, order_id: int):
     if request.method != 'POST':
         return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
     try:
-        order = cancel_order(order_id)
+        order = cancel_account_order(order_id)
     except SimulationOrder.DoesNotExist:
         return JsonResponse({'success': False, 'error': '订单不存在'}, status=404)
     except TradingError as exc:
         return JsonResponse({'success': False, 'error': str(exc)}, status=400)
-    return JsonResponse({'success': True, 'data': _order_data(order)})
+    return JsonResponse({'success': True, 'data': order_data(order)})
 
 
 def account_summary(request, account_id: int):
     """返回账户现金、实时持仓市值和总资产；券商账户先尝试同步，失败时返回本地缓存并附带错误。"""
     try:
-        account = SimulationAccount.objects.get(pk=account_id)
+        data = build_account_summary(account_id)
     except SimulationAccount.DoesNotExist:
         return JsonResponse({'success': False, 'error': '账户不存在'}, status=404)
-    sync_error = None
-    if account.is_external:
-        try:
-            sync_account(account)
-        except BrokerError as exc:
-            sync_error = str(exc)
-    positions = []
-    market_value = Decimal('0')
-    provider = get_provider(account.market)
-    for position in account.positions.all():
-        try:
-            quote = provider.get_quote(position.symbol)
-            current_price = Decimal(str(quote.price))
-        except MarketDataError:
-            current_price = position.average_price
-        value = current_price * position.quantity
-        market_value += value
-        positions.append({
-            'symbol': position.symbol,
-            'quantity': position.quantity,
-            'average_price': float(position.average_price),
-            'current_price': float(current_price),
-            'market_value': float(value),
-            'unrealized_pnl': float((current_price - position.average_price) * position.quantity),
-        })
-    total_assets = account.cash + market_value
-    return JsonResponse({'success': True, 'data': {
-        **_account_data(account),
-        'market_value': float(market_value),
-        'total_assets': float(total_assets),
-        'total_return': float((total_assets / account.initial_cash - 1) * 100) if account.initial_cash else 0.0,
-        'positions': positions,
-        'sync_error': sync_error,
-    }})
+    return JsonResponse({'success': True, 'data': data})
 
 
 def account_analytics(request, account_id: int):
     """返回账户的 FIFO 已实现盈亏、未实现盈亏及交易统计。"""
     try:
-        account = SimulationAccount.objects.get(pk=account_id)
+        data = build_account_analytics(account_id)
     except SimulationAccount.DoesNotExist:
         return JsonResponse({'success': False, 'error': '账户不存在'}, status=404)
-    return JsonResponse({'success': True, 'data': build_account_analytics(account)})
+    return JsonResponse({'success': True, 'data': data})
 
 
 @csrf_exempt
@@ -285,47 +202,19 @@ def research_backtest(request):
         return JsonResponse({'success': False, 'error': '不支持的请求方法'}, status=405)
     try:
         data = json.loads(request.body or '{}')
-        end = date.fromisoformat(data.get('end_date', available_end().isoformat()))
-        start = date.fromisoformat(data.get('start_date', RESEARCH_START.isoformat()))
-        provider = _research_history_provider(data.get('market', 'A'), data)
-        bars = provider.get_history(data['symbol'], start, end)
-        result = run_sma_cross(
-            bars=bars,
+        default_start, default_end = default_research_range()
+        result = run_sma_research(
+            market=data.get('market', 'A'),
+            symbol=data['symbol'],
+            start=date.fromisoformat(data.get('start_date', default_start.isoformat())),
+            end=date.fromisoformat(data.get('end_date', default_end.isoformat())),
+            data_source=data.get('data_source', 'snapshot'),
             initial_cash=float(data.get('initial_cash', 100000)),
             short_window=int(data.get('short_window', 5)),
             long_window=int(data.get('long_window', 20)),
             commission_rate=float(data.get('commission_rate', 0.0003)),
             slippage_bps=float(data.get('slippage_bps', 2)),
         )
-        result.update({
-            'symbol': data['symbol'].upper(),
-            'market': data.get('market', 'A').upper(),
-            'data_source': provider.__class__.__name__,
-            'datasets': provider.datasets,
-            'historical_data': [bar.to_dict() for bar in bars],
-        })
-        run = ResearchRun.objects.create(
-            market=result['market'],
-            symbol=result['symbol'],
-            strategy='sma_cross',
-            parameters={
-                'short_window': int(data.get('short_window', 5)),
-                'long_window': int(data.get('long_window', 20)),
-                'initial_cash': float(data.get('initial_cash', 100000)),
-                'commission_rate': float(data.get('commission_rate', 0.0003)),
-                'slippage_bps': float(data.get('slippage_bps', 2)),
-                'data_source': data.get('data_source', 'snapshot'),
-                'datasets': provider.datasets,
-            },
-            start_date=start,
-            end_date=end,
-            total_return=result['total_return'],
-            max_drawdown=result['max_drawdown'],
-            sharpe_ratio=result['sharpe_ratio'],
-            trade_count=result['trade_count'],
-            trades=result['trades'],
-        )
-        result['run_id'] = run.id
         return JsonResponse({'success': True, 'data': result})
     except (KeyError, ValueError, ResearchError, MarketDataError) as exc:
         return JsonResponse({'success': False, 'error': str(exc)}, status=400)
@@ -345,17 +234,17 @@ def portfolio_backtest(request):
         symbols = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
         if not symbols or len(symbols) > 20:
             return JsonResponse({'success': False, 'error': '请提供1至20个组合标的'}, status=400)
-        end = date.fromisoformat(data.get('end_date', available_end().isoformat()))
-        start = date.fromisoformat(data.get('start_date', RESEARCH_START.isoformat()))
+        default_start, default_end = default_research_range()
+        end = date.fromisoformat(data.get('end_date', default_end.isoformat()))
+        start = date.fromisoformat(data.get('start_date', default_start.isoformat()))
         if start > end:
             return JsonResponse({'success': False, 'error': '开始日期不能晚于结束日期'}, status=400)
-        provider = _research_history_provider(market, data)
-        bars_by_symbol = {
-            symbol: provider.get_history(symbol, start, end)
-            for symbol in symbols
-        }
-        result = run_portfolio_baseline(
-            bars_by_symbol=bars_by_symbol,
+        result = run_portfolio_research(
+            market=market,
+            symbols=symbols,
+            start=start,
+            end=end,
+            data_source=data.get('data_source', 'snapshot'),
             initial_cash=float(data.get('initial_cash', 100000)),
             strategy=str(data.get('strategy', 'equal_weight')).lower(),
             lookback=int(data['lookback']) if data.get('lookback') is not None else None,
@@ -364,14 +253,6 @@ def portfolio_backtest(request):
             impact_bps=float(data.get('impact_bps', 0)),
             impact_exponent=float(data.get('impact_exponent', 1)),
         )
-        result.update({
-            'market': market,
-            'data_source': provider.__class__.__name__,
-            'datasets': provider.datasets,
-            'data_counts': {symbol: len(bars) for symbol, bars in bars_by_symbol.items()},
-            'start_date': start.isoformat(),
-            'end_date': end.isoformat(),
-        })
         return JsonResponse({'success': True, 'data': result})
     except (KeyError, TypeError, ValueError, ResearchError, MarketDataError) as exc:
         return JsonResponse({'success': False, 'error': str(exc)}, status=400)
@@ -388,8 +269,9 @@ def leaky_forecast_experiment(request):
         symbol = str(data.get('symbol', '')).strip().upper()
         if not symbol:
             return JsonResponse({'success': False, 'error': '请提供标的代码'}, status=400)
-        end = date.fromisoformat(data.get('end_date', available_end().isoformat()))
-        start = date.fromisoformat(data.get('start_date', RESEARCH_START.isoformat()))
+        default_start, default_end = default_research_range()
+        end = date.fromisoformat(data.get('end_date', default_end.isoformat()))
+        start = date.fromisoformat(data.get('start_date', default_start.isoformat()))
         if start > end:
             return JsonResponse({'success': False, 'error': '开始日期不能晚于结束日期'}, status=400)
         raw_gamma_values = data.get('gamma_values') or [1.0, 0.95, 0.9, 0.8]
@@ -397,23 +279,16 @@ def leaky_forecast_experiment(request):
             gamma_values = [float(item.strip()) for item in raw_gamma_values.split(',') if item.strip()]
         else:
             gamma_values = [float(item) for item in raw_gamma_values]
-        provider = _research_history_provider(market, data)
-        bars = provider.get_history(symbol, start, end)
-        result = run_leaky_integrator_experiment(
-            bars=bars,
+        result = run_leaky_forecast_research(
+            market=market,
+            symbol=symbol,
+            start=start,
+            end=end,
+            data_source=data.get('data_source', 'snapshot'),
             train_window=int(data.get('train_window', 20)),
             horizon=int(data.get('horizon', 20)),
             gamma_values=gamma_values,
         )
-        result.update({
-            'market': market,
-            'symbol': symbol,
-            'data_source': provider.__class__.__name__,
-            'datasets': provider.datasets,
-            'data_count': len(bars),
-            'start_date': start.isoformat(),
-            'end_date': end.isoformat(),
-        })
         return JsonResponse({'success': True, 'data': result})
     except (TypeError, ValueError, ResearchError, MarketDataError) as exc:
         return JsonResponse({'success': False, 'error': str(exc)}, status=400)
