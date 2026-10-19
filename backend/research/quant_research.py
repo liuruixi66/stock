@@ -16,9 +16,9 @@ class ResearchError(ValueError):
 
 
 def reconstruct_differenced_forecast(
-    anchor: float,
-    predicted_differences: Iterable[float],
-    gamma: float = 1.0,
+    anchor: float,  # 预测起点的价格
+    predicted_differences: Iterable[float], #每一步预测的价格差分
+    gamma: float = 1.0, #历史累计预测影响的保留比例
 ) -> list[float]:
     """将一步差分预测还原为价格路径，gamma=1 为普通累加还原。"""
     if not 0 < gamma <= 1:
