@@ -81,6 +81,7 @@ class FractionalComparisonTests(SimpleTestCase):
             paths[1].write_text(json.dumps(chinese_result(second)), encoding='utf-8')
             result = compare(paths)
         self.assertEqual(result['样本稳定性汇总']['分数差分LSTM']['跑赢基准样本组数'], 2)
+        self.assertEqual(result['样本稳定性汇总']['分数差分LSTM']['平均年化收益率'], 0.01)
         self.assertEqual(result['股票池重合情况'][0]['重合股票数量'], 1)
 
     def test_changed_costs_or_model_seed_are_rejected(self):

@@ -69,7 +69,7 @@ class FractionalReplayTests(SimpleTestCase):
     def test_replays_identical_subsample_and_saved_forecasts(self):
         with TemporaryDirectory() as directory:
             source, database = self.create_inputs(Path(directory))
-            result = replay(source, database, 5)
+            result = replay(source, database)
         self.assertEqual(result['股票池筛选']['入选股票'], ['600001.SH'])
         self.assertEqual(result['股票池筛选']['通过检查股票数量'], 1)
         self.assertTrue(result['股票池筛选']['原始行情SHA256核验通过'])
@@ -83,4 +83,4 @@ class FractionalReplayTests(SimpleTestCase):
             with closing(sqlite3.connect(database)) as connection, connection:
                 connection.execute('UPDATE cn_daily SET adj_close=adj_close*1.01')
             with self.assertRaisesRegex(DifferencingError, 'price digest'):
-                replay(source, database, 5)
+                replay(source, database)

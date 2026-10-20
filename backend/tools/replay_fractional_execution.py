@@ -29,7 +29,11 @@ from research.fractional_forecast import (
 from research.fractional_results import chinese_result
 
 
-def replay(source: Path, database: Path, minimum_commission: float) -> dict:
+def replay(
+    source: Path, database: Path, commission_rate: float = 0.0003,
+    minimum_commission: float = 5.0, transfer_fee_rate: float = 0.00001,
+    stamp_duty_rate: float = 0.0005,
+) -> dict:
     data = chinese_result(json.loads(source.read_text(encoding='utf-8')))
     if '逐日预测' not in data:
         raise DifferencingError('Result lacks saved forecasts; use a newly completed experiment')
@@ -97,7 +101,6 @@ def replay(source: Path, database: Path, minimum_commission: float) -> dict:
     adjusted = adjusted[adjusted['instrument'].isin(kept)]
     options = {
         'initial_capital': parameters['初始资金'],
-        'buy_cost': parameters['买入费率'], 'sell_cost': parameters['卖出费率'],
         'signal_threshold': parameters['信号阈值'],
     }
     controls, constrained = {}, {}
@@ -112,12 +115,20 @@ def replay(source: Path, database: Path, minimum_commission: float) -> dict:
                     raise DifferencingError('Duplicate forecast in replay result')
                 if symbol in kept:
                     forecasts[key] = point['预测收益率']
+        control_options = {
+            **options,
+            'buy_cost': commission_rate + transfer_fee_rate,
+            'sell_cost': commission_rate + transfer_fee_rate + stamp_duty_rate,
+        }
         controls[method] = simulate_long_only(
-            adjusted, forecasts, universe, start, end, benchmark=benchmark, **options,
+            adjusted, forecasts, universe, start, end, benchmark=benchmark,
+            **control_options,
         )
         constrained[method] = simulate_cash_shares(
             raw_test, forecasts, universe, start, end, benchmark=benchmark,
-            minimum_commission=minimum_commission, **options,
+            commission_rate=commission_rate, minimum_commission=minimum_commission,
+            transfer_fee_rate=transfer_fee_rate, stamp_duty_rate=stamp_duty_rate,
+            **options,
         )
     return chinese_result({
         '来源结果文件': str(source.resolve()), '股票池随机种子': parameters['随机种子'],
@@ -128,11 +139,22 @@ def replay(source: Path, database: Path, minimum_commission: float) -> dict:
         },
         '规则假设': {
             '买入整手股数': 100, '最低每笔佣金元': minimum_commission,
+            '佣金率': commission_rate,
+            '佣金费率说明': '万三，单笔最低5元；按用户选择视为已含经手费和证管费',
+            '上海过户费率': transfer_fee_rate, '上海过户费方向': '买卖双向',
+            '股票卖出印花税率': stamp_duty_rate, '印花税方向': '仅卖出',
+            '费率来源': [
+                '印花税：财政部、税务总局2023年第39号公告，自2023-08-28起减半征收，股票卖出税率0.05%。',
+                '过户费：中国结算2025-12收费一览表，A股成交金额0.001%，买卖双方收取。',
+                '经手费：上交所2025-12收费表列示0.00341%双向；按用户确认纳入万三佣金，避免重复计费。',
+                '佣金万三、最低5元是本次用户指定的账户模拟假设，不是所有券商统一佣金。',
+            ],
             'T+1': '仅允许卖出前一交易日已持有的股份；每日先卖后买',
             '分红处理': '除息日记应收资产，不可用于买入；未扣股息税',
             '原价口径': '仅按无拆股及分币价格检查筛选，未获外部原价验证',
             '涨跌停': '未验证，也不限制涨跌停日成交',
-            '费率口径': '沿用原买入费率作为佣金率；卖出额外费率为原卖出费率减原买入费率，不复现历史变更',
+            '交易所经手费': '按用户确认的佣金包含经手费和证管费，不重复计费',
+            '历史适用范围': '当前费率统一应用于整个历史测试期，不代表各历史时期实际费率。',
         },
         '子样本原模拟': controls, '有限交易约束模拟': constrained,
         '解释限制': [
@@ -148,14 +170,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('results', type=Path, nargs='+')
     parser.add_argument('--database', type=Path, default=STOCKS_DATABASE_PATH)
+    parser.add_argument('--commission-rate', type=float, default=0.0003)
     parser.add_argument('--minimum-commission', type=float, default=5.0)
+    parser.add_argument('--transfer-fee-rate', type=float, default=0.00001)
+    parser.add_argument('--stamp-duty-rate', type=float, default=0.0005)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     if args.output.exists():
         parser.exit(1, 'Refusing to overwrite an existing replay\n')
     try:
         report = {'交易规则敏感性测试': [
-            replay(source, args.database, args.minimum_commission) for source in args.results
+            replay(
+                source, args.database, args.commission_rate, args.minimum_commission,
+                args.transfer_fee_rate, args.stamp_duty_rate,
+            ) for source in args.results
         ]}
         with args.output.open('x', encoding='utf-8') as output:
             json.dump(report, output, ensure_ascii=False, allow_nan=False, indent=2)

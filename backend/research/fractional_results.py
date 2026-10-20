@@ -3,6 +3,7 @@
 import re
 from typing import overload
 
+
 FIELD_NAMES = {
     'paper': '论文链接', 'status': '状态', 'universe': '股票池说明',
     'data_provenance': '数据溯源', 'inputs': '输入', 'parameters': '实验参数',
@@ -38,18 +39,23 @@ FIELD_NAMES = {
     'max_lags': '最大滞后数', 'minimum_train_samples': '最少训练样本数',
     'minimum_validation_samples': '最少验证样本数',
     'de_prado': '分数差分LSTM', 'log_return': '普通收益率LSTM',
-    'database_random_equal_slot': '随机股票池等权基准', 'simulation': '模拟方式',
-    'total_return': '累计收益率', 'annualized_return': '年化收益率',
-    'max_drawdown': '最大回撤', 'annualized_volatility': '年化波动率',
-    'sharpe_zero_risk_free': '零无风险利率夏普比率', 'costs': '累计交易费用',
-    'order_count': '成交笔数', 'missing_forecasts': '缺失预测数量',
-    'equity_curve': '净值曲线', 'trades': '成交记录', 'selection_history': '选股记录',
-    'limitations': '模拟限制', 'date': '日期', 'equity': '总资产', 'cash': '现金',
-    'signal_date': '信号日期', 'side': '买卖方向', 'value': '成交金额',
-    'cost': '交易费用', 'weight_date': '股票池依据日期', 'candidates': '候选股票',
-    'active': '持仓目标股票', 'predicted_return': '预测收益率',
-    'quantity': '成交股数', 'price': '成交价格', 'sellable_before': '卖出前可卖股数',
-    'terminal_shares': '期末持股', 'dividend_receivables': '应收分红',
+    'database_random_equal_slot': '随机股票池等权基准',
+    'simulation': '模拟方式', 'total_return': '累计收益率',
+    'annualized_return': '年化收益率', 'max_drawdown': '最大回撤',
+    'annualized_volatility': '年化波动率', 'sharpe_zero_risk_free': '零无风险利率夏普比率',
+    'costs': '累计交易费用', 'order_count': '成交笔数',
+    'missing_forecasts': '缺失预测数量', 'equity_curve': '净值曲线',
+    'trades': '成交记录', 'selection_history': '选股记录', 'limitations': '模拟限制',
+    'date': '日期', 'equity': '总资产', 'cash': '现金', 'signal_date': '信号日期',
+    'side': '买卖方向', 'value': '成交金额', 'cost': '交易费用',
+    'weight_date': '股票池依据日期', 'candidates': '候选股票', 'active': '持仓目标股票',
+    'predicted_return': '预测收益率', 'quantity': '成交股数', 'price': '成交价格',
+    'sellable_before': '卖出前可卖股数', 'terminal_shares': '期末持股',
+    'dividend_receivables': '应收分红', 'commission': '券商佣金',
+    'transfer_fee': '过户费', 'stamp_duty': '印花税',
+    'commission_costs': '累计佣金', 'transfer_fees': '累计过户费',
+    'minimum_commission': '单笔最低佣金', 'commission_rate': '佣金费率',
+    'transfer_fee_rate': '过户费率', 'stamp_duty_rate': '卖出印花税率',
 }
 
 TEXT_VALUES = {

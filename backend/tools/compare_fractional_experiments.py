@@ -75,6 +75,9 @@ def compare(paths: list[Path]) -> dict:
             '平均累计收益率': mean(row['累计收益率'] for row in rows),
             '最低累计收益率': min(row['累计收益率'] for row in rows),
             '最高累计收益率': max(row['累计收益率'] for row in rows),
+            '平均年化收益率': mean(row['年化收益率'] for row in rows),
+            '最低年化收益率': min(row['年化收益率'] for row in rows),
+            '最高年化收益率': max(row['年化收益率'] for row in rows),
         }
     return {
         '说明': '仅更换股票池随机种子，保持模型配置不变；此报告不是新模型选择依据。',
@@ -115,6 +118,9 @@ def main() -> None:
                         '有限交易约束期末资产': constrained['净值曲线'][-1]['总资产'],
                         '原模拟累计交易费用': original['累计交易费用'],
                         '约束模拟累计交易费用': constrained['累计交易费用'],
+                        '约束模拟佣金': constrained['累计佣金'],
+                        '约束模拟过户费': constrained['累计过户费'],
+                        '约束模拟印花税': constrained['印花税'],
                     }
                 summaries.append({
                     '股票池随机种子': experiment['股票池随机种子'],

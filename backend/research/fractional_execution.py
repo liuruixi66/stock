@@ -18,11 +18,19 @@ def money(value: float) -> float:
 
 
 def execution_fee(
-    notional: float, commission_rate: float, minimum_commission: float, levy_rate: float,
-) -> float:
+    notional: float, commission_rate: float, minimum_commission: float,
+    transfer_rate: float, stamp_duty_rate: float = 0.0,
+) -> dict[str, float]:
     if notional <= 0:
-        return 0.0
-    return money(max(minimum_commission, notional * commission_rate) + notional * levy_rate)
+        return {'commission': 0.0, 'transfer_fee': 0.0, 'stamp_duty': 0.0, 'total': 0.0}
+    commission = money(max(minimum_commission, notional * commission_rate))
+    transfer_fee = money(notional * transfer_rate)
+    stamp_duty = money(notional * stamp_duty_rate)
+    return {
+        'commission': commission, 'transfer_fee': transfer_fee,
+        'stamp_duty': stamp_duty,
+        'total': money(commission + transfer_fee + stamp_duty),
+    }
 
 
 def simulate_cash_shares(
@@ -31,7 +39,8 @@ def simulate_cash_shares(
     initial_capital: float = 100000, exposure: float = 0.95,
     buy_cost: float = 0.0005, sell_cost: float = 0.001,
     signal_threshold: float = 0.002, benchmark: bool = False,
-    minimum_commission: float = 5.0,
+    commission_rate: float = 0.0003, minimum_commission: float = 5.0,
+    transfer_fee_rate: float = 0.00001, stamp_duty_rate: float = 0.0005,
 ) -> dict:
     """100-share buys, settled-share sells and a minimum per-order commission.
 
@@ -43,8 +52,12 @@ def simulate_cash_shares(
             or not isfinite(exposure) or not 0 < exposure <= 1
             or not isfinite(buy_cost) or not isfinite(sell_cost)
             or not 0 <= buy_cost <= sell_cost < 1
+            or not isfinite(commission_rate) or not 0 <= commission_rate < 1
             or not isfinite(minimum_commission) or minimum_commission < 0):
         raise DifferencingError('Invalid nominal-share simulation settings')
+    if (not isfinite(transfer_fee_rate) or not 0 <= transfer_fee_rate < 1
+            or not isfinite(stamp_duty_rate) or not 0 <= stamp_duty_rate < 1):
+        raise DifferencingError('Invalid transfer fee or stamp duty rate')
     if not isfinite(signal_threshold) or not 0 < signal_threshold < 1:
         raise DifferencingError('Invalid signal threshold')
     if not {'dividends', 'splits'} <= set(prices.columns):
@@ -74,6 +87,9 @@ def simulate_cash_shares(
     pending = None
     curve, trades = [], []
     total_fees = 0.0
+    total_commission = 0.0
+    total_transfer_fee = 0.0
+    total_stamp_duty = 0.0
     for day in days:
         rows = daily[day]
         # Only shares carried from a previous trading date may be sold today.
@@ -98,16 +114,23 @@ def simulate_cash_shares(
                 if quantity <= 0:
                     continue
                 value = money(quantity * price)
-                fee = execution_fee(value, buy_cost, minimum_commission, sell_cost - buy_cost)
-                if value <= fee:
+                fee_components = execution_fee(
+                    value, commission_rate, minimum_commission,
+                    transfer_fee_rate, stamp_duty_rate,
+                )
+                if value <= fee_components['total']:
                     continue
                 shares[symbol] -= quantity
-                cash = money(cash + value - fee)
-                total_fees = money(total_fees + fee)
+                cash = money(cash + value - fee_components['total'])
+                total_fees = money(total_fees + fee_components['total'])
+                total_commission = money(total_commission + fee_components['commission'])
+                total_transfer_fee = money(total_transfer_fee + fee_components['transfer_fee'])
+                total_stamp_duty = money(total_stamp_duty + fee_components['stamp_duty'])
                 trades.append({
                     'date': day.isoformat(), 'signal_date': origin.isoformat(),
                     'instrument': symbol, 'side': 'SELL', 'quantity': quantity,
-                    'price': price, 'value': value, 'cost': fee,
+                    'price': price, 'value': value, 'cost': fee_components['total'],
+                    **fee_components,
                     'sellable_before': settled.get(symbol, 0),
                 })
             shares = {symbol: quantity for symbol, quantity in shares.items() if quantity}
@@ -121,19 +144,24 @@ def simulate_cash_shares(
                 quantity = min(quantity, affordable)
                 while quantity > 0:
                     value = money(quantity * price)
-                    fee = execution_fee(value, buy_cost, minimum_commission, 0.0)
-                    if value + fee <= cash:
+                    fee_components = execution_fee(
+                        value, commission_rate, minimum_commission, transfer_fee_rate,
+                    )
+                    if value + fee_components['total'] <= cash:
                         break
                     quantity -= 100
                 if quantity <= 0:
                     continue
                 shares[symbol] = shares.get(symbol, 0) + quantity
-                cash = money(cash - value - fee)
-                total_fees = money(total_fees + fee)
+                cash = money(cash - value - fee_components['total'])
+                total_fees = money(total_fees + fee_components['total'])
+                total_commission = money(total_commission + fee_components['commission'])
+                total_transfer_fee = money(total_transfer_fee + fee_components['transfer_fee'])
                 trades.append({
                     'date': day.isoformat(), 'signal_date': origin.isoformat(),
                     'instrument': symbol, 'side': 'BUY', 'quantity': quantity,
-                    'price': price, 'value': value, 'cost': fee,
+                    'price': price, 'value': value, 'cost': fee_components['total'],
+                    **fee_components,
                 })
         equity = cash + receivables + sum(
             quantity * rows[symbol]['close'] for symbol, quantity in shares.items()
@@ -167,13 +195,17 @@ def simulate_cash_shares(
         'max_drawdown': float(np.min(equity / np.maximum.accumulate(equity) - 1)),
         'annualized_volatility': volatility,
         'sharpe_zero_risk_free': float(np.mean(returns) * 252 / volatility) if volatility else None,
-        'costs': total_fees, 'order_count': len(trades),
+        'costs': total_fees, 'commission_costs': total_commission,
+        'transfer_fees': total_transfer_fee, 'stamp_duty': total_stamp_duty,
+        'order_count': len(trades),
         'missing_forecasts': 0, 'equity_curve': curve, 'trades': trades,
         'terminal_shares': shares, 'dividend_receivables': receivables,
         'limitations': [
             '仅使用价格精度检查通过且无拆股的子样本，原价和公司行动未获外部验证。',
             '买入100股整手，卖出不超过前一交易日持仓；本策略仅每日开盘调仓，T+1通常不构成额外限制。',
-            '佣金率沿用原买入费率；卖出附加费率为原卖出费率减去原买入费率，未复现历史费率变更。',
+            '佣金假设为成交额万三、单笔最低5元，含经手费和证管费；券商实际佣金以账户协议为准。',
+            '另计沪市过户费万分之0.1双向及卖出印花税千分之0.5。',
+            '当前费率统一应用于整个历史测试期，不代表各历史时期实际费率。',
             '缺少分红到账日：除息日计入税前应收资产，全程不作为可用买入现金。',
             '历史ST、涨跌停、股改、配股和公司行动完整性未验证；不模拟冲击成本和盘口成交量。',
             '期末持仓及未到账分红计入资产，不做强制清仓。',
