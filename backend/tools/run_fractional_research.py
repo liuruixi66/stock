@@ -34,7 +34,10 @@ def run(args) -> dict:
         stock = prices[prices['instrument'] == symbol]
         for method in predictions:
             print(f'Training {symbol} {method} using pre-test data', flush=True)
-            metadata, forecasts = train_stock(stock, config, method, trial_settings)
+            metadata, forecasts = train_stock(
+                stock, config, method, trial_settings,
+                walk_forward_validation_days=args.walk_forward_validation_days,
+            )
             models[f'{symbol}:{method}'] = metadata
             predictions[method].update(forecasts)
 
@@ -79,6 +82,7 @@ def run(args) -> dict:
             'seed': args.seed,
             'model_seed': 42,
             'universe_size': args.universe_size,
+            'walk_forward_validation_days': args.walk_forward_validation_days,
             'buy_cost': args.buy_cost,
             'sell_cost': args.sell_cost,
             'signal_threshold': args.signal_threshold,
@@ -99,8 +103,7 @@ def run(args) -> dict:
             'De Prado and first-difference branches only; no ARFIMA/ARTFIMA R estimator replication.',
             'ADF grid 0.05, truncation 0.001, AIC lag selection are disclosed implementation settings.',
             'Single-layer PyTorch LSTM; CUDA GPU 0 first, GPU 0+1 after single-GPU OOM, CPU only when CUDA is unavailable.',
-            'Hidden16/32, best validation epoch, no test-time fitting.',
-            'The final model is refit on training and validation samples before testing; exact split dates are recorded in parameters.',
+            'Hidden16/32, daily walk-forward model/epoch selection on the preceding 60 labeled samples; every prediction is fit only on data before its target date.',
             'Daily equal allocation slots; no reallocation of inactive slots, 95% max exposure.',
             'Research costs cannot replace actual A-share commissions or execution rules.',
             'Only a research simulator; actual stock execution must be validated separately.',
@@ -120,6 +123,10 @@ def main() -> None:
     parser.add_argument('--seed', type=int, default=42,
                         help='Stock-sample seed; model initialization stays fixed at 42')
     parser.add_argument('--universe-size', type=int, default=30)
+    parser.add_argument(
+        '--walk-forward-validation-days', type=int, default=60,
+        help='Use this many immediately preceding trading-day samples for daily model selection',
+    )
     parser.add_argument('--train-start', type=date.fromisoformat, default=date(2023, 1, 1))
     parser.add_argument('--validation-start', type=date.fromisoformat, default=date(2024, 1, 1))
     parser.add_argument('--test-start', type=date.fromisoformat, default=date(2025, 1, 1))

@@ -101,8 +101,16 @@ def prepare_sequences(
 def train_stock(
     frame: pd.DataFrame, config: ForecastConfig, method: str,
     trials: Sequence[LSTMTrial] | None = None, seed: int = 42,
+    walk_forward_validation_days: int = 60,
 ) -> tuple[dict, dict[tuple[date, str], float]]:
+    """逐预测日执行滚动选型、历史重训和下一交易日预测。"""
     config.validate()
+    if (isinstance(walk_forward_validation_days, bool)
+            or not isinstance(walk_forward_validation_days, int)
+            or walk_forward_validation_days < config.minimum_validation_samples):
+        raise DifferencingError(
+            'walk_forward_validation_days must be at least minimum_validation_samples',
+        )
     frame = validate_prices(frame)
     frame = frame[(frame['date'] >= config.train_start) & (frame['date'] <= config.test_end)]
     if frame.empty:
@@ -150,12 +158,13 @@ def train_stock(
             sequence, _ = self.lstm(values)
             return self.output(sequence[:, -1]).squeeze(-1)
 
-    x, y = torch.from_numpy(data['x']), torch.from_numpy(data['y'])
-    train_indices = torch.from_numpy(np.flatnonzero(data['train']))
-    validation_indices = torch.from_numpy(np.flatnonzero(data['validation']))
     loss_function = nn.MSELoss()
 
-    def fit(use_data_parallel: bool) -> tuple[dict, float, dict, list]:
+    def fit(
+        x: torch.Tensor, y: torch.Tensor,
+        train_indices: torch.Tensor, validation_indices: torch.Tensor,
+        use_data_parallel: bool,
+    ) -> tuple[dict, float, dict, list]:
         best_state = None
         best_validation_loss = float('inf')
         selected_trial = None
@@ -168,6 +177,7 @@ def train_stock(
             if use_data_parallel:
                 model = nn.DataParallel(model, device_ids=[0, 1])
             optimizer = torch.optim.Adam(model.parameters(), lr=trial.learning_rate)
+            validation_loss = float('inf')
             for epoch in range(trial.epochs):
                 model.train()
                 for batch in train_indices.split(trial.batch_size):
@@ -210,114 +220,178 @@ def train_stock(
             raise DifferencingError('No trained model selected')
         return best_state, best_validation_loss, selected_trial, trial_results
 
-    used_data_parallel = False
-    gpu_oom_fallback = False
-    if gpu_count:
+    forecast_indices = np.flatnonzero(data['test'])
+    if not len(forecast_indices):
+        raise DifferencingError('No test forecast dates in configured interval')
+    predictions = {}
+    price_errors = []
+    daily_selections = []
+    selection_counts = {str(index): 0 for index in range(len(trials))}
+    used_data_parallel_any = False
+    gpu_oom_fallback_any = False
+    last_model = None
+    last_scaler = None
+    last_metadata = None
+    last_loss = None
+    last_results = None
+    last_fit_count = 0
+
+    for sample_index in forecast_indices:
+        target_day = data['target_dates'][sample_index]
+        history_indices = np.asarray([
+            index for index, day in enumerate(data['target_dates']) if day < target_day
+        ], dtype=int)
+        validation_indices_array = history_indices[-walk_forward_validation_days:]
+        train_indices_array = history_indices[:-walk_forward_validation_days]
+        if (len(train_indices_array) < config.minimum_train_samples
+                or len(validation_indices_array) < config.minimum_validation_samples):
+            raise DifferencingError(
+                f'Insufficient pre-{target_day} history for walk-forward training: '
+                f'{len(train_indices_array)} train, {len(validation_indices_array)} validation samples',
+            )
+
+        validation_start_day = data['target_dates'][validation_indices_array[0]]
+        selection_features = np.asarray([
+            config.train_start <= day < validation_start_day for day in data['dates']
+        ]) & np.isfinite(data['features']).all(axis=1)
+        selection_x_mean = data['features'][selection_features].mean(axis=0)
+        selection_x_scale = data['features'][selection_features].std(axis=0)
+        selection_x_scale[selection_x_scale < 1e-12] = 1.0
+        selection_y_mean = float(data['raw_y'][train_indices_array].mean())
+        selection_y_scale = float(data['raw_y'][train_indices_array].std())
+        if selection_y_scale < 1e-12:
+            raise DifferencingError(f'Pre-{target_day} training targets are constant')
+        selection_x = torch.from_numpy(
+            ((data['raw_x'] - selection_x_mean) / selection_x_scale).astype(np.float32),
+        )
+        selection_y = torch.from_numpy(
+            ((data['raw_y'] - selection_y_mean) / selection_y_scale).astype(np.float32),
+        )
+        train_indices = torch.from_numpy(train_indices_array)
+        validation_indices = torch.from_numpy(validation_indices_array)
+
+        used_data_parallel = False
         try:
-            best_model, best_loss, best_metadata, results = fit(use_data_parallel=False)
+            best_model, best_loss, best_metadata, results = fit(
+                selection_x, selection_y, train_indices, validation_indices,
+                use_data_parallel=False,
+            )
         except torch.cuda.OutOfMemoryError as exc:
             if gpu_count < 2:
                 raise DifferencingError(
-                    'LSTM ran out of memory on the single available GPU; '
-                    'configure two visible CUDA GPUs or reduce the batch size',
+                    f'LSTM ran out of memory before {target_day}; '
+                    'reduce the batch size or model size',
                 ) from exc
-            gpu_oom_fallback = True
-        if gpu_oom_fallback:
-            # 先退出异常处理块，使异常回溯释放失败训练所持有的 GPU 张量；
-            # 然后清理 CUDA 缓存，再尝试双卡数据并行回退。
+            gpu_oom_fallback_any = True
             torch.cuda.empty_cache()
             try:
-                best_model, best_loss, best_metadata, results = fit(use_data_parallel=True)
+                best_model, best_loss, best_metadata, results = fit(
+                    selection_x, selection_y, train_indices, validation_indices,
+                    use_data_parallel=True,
+                )
                 used_data_parallel = True
+                used_data_parallel_any = True
             except torch.cuda.OutOfMemoryError as fallback_exc:
                 raise DifferencingError(
-                    'LSTM ran out of memory using both available GPUs; '
+                    f'LSTM ran out of memory on both GPUs before {target_day}; '
                     'reduce the batch size or model size',
                 ) from fallback_exc
-    else:
-        best_model, best_loss, best_metadata, results = fit(use_data_parallel=False)
 
-    if best_model is None or best_metadata is None:
-        raise DifferencingError('No trained model selected')
+        refit_feature_mask = np.asarray([
+            config.train_start <= day < target_day for day in data['dates']
+        ]) & np.isfinite(data['features']).all(axis=1)
+        x_mean = data['features'][refit_feature_mask].mean(axis=0)
+        x_scale = data['features'][refit_feature_mask].std(axis=0)
+        x_scale[x_scale < 1e-12] = 1.0
+        y_mean = float(data['raw_y'][history_indices].mean())
+        y_scale = float(data['raw_y'][history_indices].std())
+        if y_scale < 1e-12:
+            raise DifferencingError(f'Pre-{target_day} refit targets are constant')
+        x = torch.from_numpy(((data['raw_x'] - x_mean) / x_scale).astype(np.float32))
+        y = torch.from_numpy(((data['raw_y'] - y_mean) / y_scale).astype(np.float32))
 
-    refit_mask = data['train'] | data['validation']
-    refit_indices = np.flatnonzero(refit_mask)
-    feature_fit = np.asarray([
-        config.train_start <= day < config.test_start for day in data['dates']
-    ]) & np.isfinite(data['features']).all(axis=1)
-    x_mean = data['features'][feature_fit].mean(axis=0)
-    x_scale = data['features'][feature_fit].std(axis=0)
-    x_scale[x_scale < 1e-12] = 1.0
-    y_mean = float(data['raw_y'][refit_mask].mean())
-    y_scale = float(data['raw_y'][refit_mask].std())
-    if y_scale < 1e-12:
-        raise DifferencingError('Pre-test targets are constant')
-    x = torch.from_numpy(((data['raw_x'] - x_mean) / x_scale).astype(np.float32))
-    y = torch.from_numpy(((data['raw_y'] - y_mean) / y_scale).astype(np.float32))
-    final_trial = trials[int(best_metadata['trial_index'])]
-    torch.manual_seed(seed)
-    final_model = Network(x.shape[-1], final_trial.hidden_size).to(device)
-    if used_data_parallel:
-        final_model = nn.DataParallel(final_model, device_ids=[0, 1])
-    optimizer = torch.optim.Adam(final_model.parameters(), lr=final_trial.learning_rate)
-    for _ in range(int(best_metadata['epoch'])):
-        final_model.train()
-        for batch in torch.from_numpy(refit_indices).split(final_trial.batch_size):
-            inputs = x[batch]
-            if device.type == 'cuda' and not used_data_parallel:
-                inputs = inputs.to(device)
-            targets = y[batch].to(device)
-            optimizer.zero_grad()
-            loss = loss_function(final_model(inputs), targets)
-            if not torch.isfinite(loss):
-                raise DifferencingError(f'Non-finite refit loss for {symbol}')
-            loss.backward()
-            optimizer.step()
-    final_model.eval()
-    unwrapped = final_model.module if isinstance(final_model, nn.DataParallel) else final_model
-    best_model = {
-        name: value.detach().cpu().clone()
-        for name, value in unwrapped.state_dict().items()
-    }
-    model = Network(x.shape[-1], best_metadata['hidden_size']).to(device)
-    model.load_state_dict(best_model)
-    model.eval()
-    forecast_indices = np.flatnonzero(data['test'])
-    predictions = {}
-    price_errors = []
-    with torch.no_grad():
-        for batch in np.array_split(forecast_indices, max(1, len(forecast_indices) // 128 + 1)):
-            if not len(batch):
-                continue
-            output = model(x[torch.from_numpy(batch)].to(device)).detach().cpu().numpy()
-            differences = output * y_scale + y_mean
-            for index, prediction in zip(batch, differences):
-                origin = int(data['origins'][index])
-                log_price = invert_one_step(float(prediction), data['logs'][:origin + 1], data['weights'])
-                predicted_return = exp(log_price - data['logs'][origin]) - 1
-                if not np.isfinite(predicted_return):
-                    raise DifferencingError(f'Invalid inverse forecast for {symbol}')
-                origin_day = data['dates'][origin]
-                predictions[(origin_day, symbol)] = predicted_return
-                actual_return = exp(data['logs'][origin + 1] - data['logs'][origin]) - 1
-                price_errors.append(abs(predicted_return - actual_return))
+        final_trial = trials[int(best_metadata['trial_index'])]
+        torch.manual_seed(seed)
+        final_model = Network(x.shape[-1], final_trial.hidden_size).to(device)
+        if used_data_parallel:
+            final_model = nn.DataParallel(final_model, device_ids=[0, 1])
+        optimizer = torch.optim.Adam(final_model.parameters(), lr=final_trial.learning_rate)
+        refit_indices = torch.from_numpy(history_indices)
+        for _ in range(int(best_metadata['epoch'])):
+            final_model.train()
+            for batch in refit_indices.split(final_trial.batch_size):
+                inputs = x[batch]
+                if device.type == 'cuda' and not used_data_parallel:
+                    inputs = inputs.to(device)
+                targets = y[batch].to(device)
+                optimizer.zero_grad()
+                loss = loss_function(final_model(inputs), targets)
+                if not torch.isfinite(loss):
+                    raise DifferencingError(f'Non-finite refit loss before {target_day} for {symbol}')
+                loss.backward()
+                optimizer.step()
+        final_model.eval()
+        with torch.no_grad():
+            output = float(final_model(x[sample_index:sample_index + 1].to(device)).item())
+        prediction = output * y_scale + y_mean
+        origin = int(data['origins'][sample_index])
+        log_price = invert_one_step(
+            float(prediction), data['logs'][:origin + 1], data['weights'],
+        )
+        predicted_return = exp(log_price - data['logs'][origin]) - 1
+        if not np.isfinite(predicted_return):
+            raise DifferencingError(f'Invalid inverse forecast for {symbol} on {target_day}')
+        origin_day = data['dates'][origin]
+        predictions[(origin_day, symbol)] = predicted_return
+        actual_return = exp(data['logs'][origin + 1] - data['logs'][origin]) - 1
+        price_errors.append(abs(predicted_return - actual_return))
+
+        unwrapped = final_model.module if isinstance(final_model, nn.DataParallel) else final_model
+        last_model = {
+            name: value.detach().cpu().clone()
+            for name, value in unwrapped.state_dict().items()
+        }
+        last_scaler = {
+            'x_mean': x_mean.tolist(), 'x_scale': x_scale.tolist(),
+            'y_mean': y_mean, 'y_scale': y_scale,
+        }
+        last_metadata, last_loss, last_results = best_metadata, best_loss, results
+        last_fit_count = len(history_indices)
+        selection_counts[str(best_metadata['trial_index'])] += 1
+        daily_selections.append({
+            'target_date': target_day.isoformat(),
+            'train_samples': len(train_indices_array),
+            'validation_start': validation_start_day.isoformat(),
+            'validation_samples': len(validation_indices_array),
+            'selected_trial': int(best_metadata['trial_index']),
+            'selected_epoch': int(best_metadata['epoch']),
+            'validation_mse_scaled': best_loss,
+        })
+
+    if last_model is None or last_metadata is None or last_scaler is None:
+        raise DifferencingError('No walk-forward model was trained')
     metadata = {
         'instrument': symbol, 'method': method, 'order_details': order_details,
-        'sample_counts': {name: int(data[name].sum()) for name in ('train', 'validation', 'test')},
-        'final_fit_samples': int(refit_mask.sum()),
-        'selected_model': best_metadata, 'validation_mse_scaled': best_loss,
+        'sample_counts': {
+            'train': last_fit_count - walk_forward_validation_days,
+            'validation': walk_forward_validation_days,
+            'test': len(forecast_indices),
+        },
+        'final_fit_samples': last_fit_count,
+        'walk_forward_validation_days': walk_forward_validation_days,
+        'walk_forward_prediction_count': len(forecast_indices),
+        'walk_forward_trial_selection_counts': selection_counts,
+        'daily_selections': daily_selections,
+        'selected_model': last_metadata, 'validation_mse_scaled': last_loss,
         'test_return_mae': float(np.mean(price_errors)) if price_errors else None,
-        'trials': results, 'seed': seed,
+        'trials': last_results, 'seed': seed,
         'training_device': str(device),
         'visible_gpu_count': gpu_count,
         'gpu_names': [torch.cuda.get_device_name(index) for index in range(gpu_count)],
-        'data_parallel_gpus': [0, 1] if used_data_parallel else [],
-        'gpu_oom_fallback': gpu_oom_fallback,
-        'model': {name: tensor.tolist() for name, tensor in best_model.items()},
-        'scaler': {
-            'x_mean': x_mean.tolist(), 'x_scale': x_scale.tolist(),
-            'y_mean': y_mean, 'y_scale': y_scale,
-        },
+        'data_parallel_gpus': [0, 1] if used_data_parallel_any else [],
+        'gpu_oom_fallback': gpu_oom_fallback_any,
+        'model': {name: tensor.tolist() for name, tensor in last_model.items()},
+        'scaler': last_scaler,
         'weights': data['weights'].tolist(),
         'config': {name: value.isoformat() if isinstance(value, date) else value
                    for name, value in asdict(config).items()},

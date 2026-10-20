@@ -80,10 +80,8 @@ TEXT_VALUES = {
         'ADF阶数网格步长0.05、权重截断阈值0.001，按AIC选择滞后阶数。',
     'Single-layer PyTorch LSTM; CUDA GPU 0 first, GPU 0+1 after single-GPU OOM, CPU only when CUDA is unavailable.':
         '单层PyTorch LSTM，优先GPU 0，单卡显存不足后使用GPU 0和1，仅CUDA不可用时使用CPU。',
-    'Hidden16/32, best validation epoch, no test-time fitting.':
-        '隐藏单元16或32，按验证误差选择最佳轮次，测试期间不拟合。',
-    'The final model is refit on training and validation samples before testing; exact split dates are recorded in parameters.':
-        '测试前使用训练集与验证集样本重新拟合最终模型，具体区间见实验参数。',
+    'Hidden16/32, daily walk-forward model/epoch selection on the preceding 60 labeled samples; every prediction is fit only on data before its target date.':
+        '隐藏单元16或32；逐日使用此前60个已标注样本选模型和轮次，每次预测只用目标日前的数据拟合。',
     'Daily equal allocation slots; no reallocation of inactive slots, 95% max exposure.':
         '每日等额配置，未启用的份额保留现金，目标最大仓位95%。',
     'Research costs cannot replace actual A-share commissions or execution rules.':
