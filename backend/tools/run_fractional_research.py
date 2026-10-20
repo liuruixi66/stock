@@ -115,8 +115,10 @@ def main() -> None:
         '--database', type=Path, default=STOCKS_DATABASE_PATH,
         help='Read-only stocks.db path',
     )
-    parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--output', type=Path, required=True,
+                        help='Chinese JSON results, including saved forecasts; refuses overwrite')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Stock-sample seed; model initialization stays fixed at 42')
     parser.add_argument('--universe-size', type=int, default=30)
     parser.add_argument('--train-start', type=date.fromisoformat, default=date(2006, 10, 16))
     parser.add_argument('--validation-start', type=date.fromisoformat, default=date(2014, 10, 14))

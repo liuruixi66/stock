@@ -1,6 +1,7 @@
 """Localize result presentation without changing model parameter identifiers."""
 
 import re
+from typing import overload
 
 FIELD_NAMES = {
     'paper': '论文链接', 'status': '状态', 'universe': '股票池说明',
@@ -47,6 +48,8 @@ FIELD_NAMES = {
     'signal_date': '信号日期', 'side': '买卖方向', 'value': '成交金额',
     'cost': '交易费用', 'weight_date': '股票池依据日期', 'candidates': '候选股票',
     'active': '持仓目标股票', 'predicted_return': '预测收益率',
+    'quantity': '成交股数', 'price': '成交价格', 'sellable_before': '卖出前可卖股数',
+    'terminal_shares': '期末持股', 'dividend_receivables': '应收分红',
 }
 
 TEXT_VALUES = {
@@ -92,6 +95,22 @@ TEXT_VALUES = {
     'Historical snapshot dates must be verified as available at their stated date.':
         '历史快照需核实在其标注日期确实可获取。',
 }
+
+
+@overload
+def chinese_result(value: dict) -> dict: ...
+
+
+@overload
+def chinese_result(value: list) -> list: ...
+
+
+@overload
+def chinese_result(value: str) -> str: ...
+
+
+@overload
+def chinese_result(value: object) -> object: ...
 
 
 def chinese_result(value):
