@@ -126,4 +126,5 @@ def get_available_date_ranges(request):
         })
 
 # 这个函数需要添加到urls.py中
+# 如需启用日期范围查询，需先确认视图的数据源与响应格式，再将此路由加入 api/urls.py。
 # path('api/date-ranges/', get_available_date_ranges, name='get_available_date_ranges'),

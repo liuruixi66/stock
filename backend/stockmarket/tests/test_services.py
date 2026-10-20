@@ -528,7 +528,7 @@ class BrokerAccountApiTests(TestCase):
         account = SimulationAccount.objects.create(
             name='富途', market='US', currency='USD', broker='FUTU', initial_cash=Decimal('100'), cash=Decimal('100'),
         )
-        with patch('api.trading_views.sync_account', side_effect=BrokerError('OpenD 未连接')):
+        with patch('stockmarket.services.trading.sync_account', side_effect=BrokerError('OpenD 未连接')):
             response = self.client.get(reverse('paper_account_summary', args=[account.id]))
         self.assertEqual(response.status_code, 200)
         self.assertIn('OpenD', response.json()['data']['sync_error'])
@@ -734,7 +734,7 @@ class MarketHistoryApiTests(TestCase):
         self.assertEqual(response.json()['data']['interval'], '1m')
         self.assertEqual(response.json()['data']['bars'][0]['timestamp'], '2025-01-02T12:01:00+00:00')
 
-    @patch('api.trading_views.LocalHistoryProvider')
+    @patch('stockmarket.services.research.LocalHistoryProvider')
     def test_portfolio_backtest_endpoint_runs_local_baseline(self, get_provider_mock) -> None:
         class PortfolioProvider:
             datasets = {}
@@ -766,7 +766,7 @@ class MarketHistoryApiTests(TestCase):
         self.assertEqual(response.json()['data']['strategy'], 'equal_weight')
         self.assertEqual(response.json()['data']['data_counts']['AAPL'], 6)
 
-    @patch('api.trading_views.LocalHistoryProvider')
+    @patch('stockmarket.services.research.LocalHistoryProvider')
     def test_leaky_forecast_endpoint_returns_gamma_metrics(self, get_provider_mock) -> None:
         class ForecastProvider:
             datasets = {}

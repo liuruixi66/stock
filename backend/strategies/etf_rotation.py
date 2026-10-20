@@ -1,4 +1,9 @@
-"""Portable, long-only ETF rotation research rules (no broker or network calls)."""
+"""提供可移植的 ETF 轮动研究规则。
+
+本模块只负责根据已完成的历史 K 线计算目标持仓权重，不访问网络、不连接券商，
+也不会提交订单。回测平台、研究命令和外部平台适配器可以共用这里的纯计算逻辑。
+调用方必须显式提供信号日期，避免把该日期之后的数据带入特征计算。
+"""
 
 from dataclasses import dataclass
 from datetime import date
@@ -9,6 +14,8 @@ from typing import Dict, Mapping, Optional, Sequence
 
 @dataclass(frozen=True)
 class RotationBar:
+    """单只 ETF 在一个交易日的 OHLCV 日线数据。"""
+
     date: date
     close: float
     high: float
@@ -18,6 +25,12 @@ class RotationBar:
 
 @dataclass(frozen=True)
 class RotationConfig:
+    """轮动模型的观察窗口、持仓数和风险约束。
+
+    `history_count` 给出计算全部特征所需的最少 K 线数量；修改窗口参数时，
+    调用方应据此检查历史数据覆盖，避免因数据不足产生不完整信号。
+    """
+
     short_window: int = 20
     momentum_window: int = 60
     trend_window: int = 120
@@ -36,6 +49,7 @@ class RotationConfig:
                    self.volatility_window + 1, self.short_window + 1)
 
     def validate(self) -> None:
+        """拒绝无效窗口、权重范围和风险参数，避免静默生成不受约束的目标仓位。"""
         windows = (self.short_window, self.momentum_window, self.trend_window,
                    self.volatility_window, self.holdings)
         if any(isinstance(value, bool) or not isinstance(value, int) or value < 1
@@ -55,7 +69,11 @@ class RotationConfig:
 
 
 def shrink_to_equal(weights: Mapping[str, float], strength: float) -> Dict[str, float]:
-    """Convex equal-weight shrinkage, not an entropy optimization solver."""
+    """将输入权重按给定强度向等权配置收缩。
+
+    `strength=0` 保留原权重，`strength=1` 完全等权；这是凸组合平滑，
+    并非熵优化或其他约束优化器。
+    """
     if not isfinite(strength) or not 0 <= strength <= 1:
         raise ValueError('strength must be in [0, 1]')
     if not weights:
@@ -70,10 +88,12 @@ def build_rotation_targets(
     as_of: date,
     config: Optional[RotationConfig] = None,
 ) -> dict:
-    """Compute weights using completed bars dated at or before explicit as_of.
+    """用信号日及以前已完成的 K 线计算 ETF 目标权重。
 
-    Future bars are discarded before validation and scoring. Invalid, stale and
-    short histories have explicit rejection reasons; they never receive weight.
+    先丢弃 `as_of` 之后的数据，再校验日期顺序、K 线有效性和历史长度；
+    不满足条件的标的会写入拒绝原因，且不会获得目标权重。符合条件的标的
+    先按趋势状态过滤，再按动量与波动率评分选取，最后按逆波动率分配并受
+    单标的上限、组合暴露上限和目标波动率约束。
     """
     config = config or RotationConfig()
     config.validate()
@@ -146,7 +166,8 @@ def build_rotation_targets(
         allocation = shrink_to_equal(
             {symbol: value / total for symbol, value in inverse.items()}, config.shrinkage,
         )
-        # The weighted sum of asset volatilities bounds covariance-based vol.
+        # 加权资产波动率是组合协方差波动率的保守上界；据此缩放总仓位，
+        # 避免仅凭分散化假设低估组合风险。
         conservative_vol = sum(allocation[symbol] * features[symbol]['annual_volatility']
                                for symbol in selected)
         exposure = min(config.max_exposure, config.target_volatility / conservative_vol)

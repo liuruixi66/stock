@@ -1,4 +1,9 @@
-"""Chronological LSTM experiment; training settings are disclosed migration choices."""
+"""按时间顺序训练和评估 LSTM 预测模型的研究实验。
+
+训练、验证和测试数据按目标日期切分，标准化参数仅从训练期计算；模型参数、
+随机种子和运行结果会保留，以便复现实验。该模块用于研究预测误差，不直接连接
+交易账户，也不应把测试集表现解释为未来收益保证。
+"""
 
 from dataclasses import asdict, dataclass
 from datetime import date
@@ -32,7 +37,12 @@ class LSTMTrial:
 def prepare_sequences(
     frame: pd.DataFrame, config: ForecastConfig, order: float,
 ) -> dict:
-    """Target at t+1, features end at t; split by target date, never origin date."""
+    """构造一步预测序列，并按目标日期划分训练、验证和测试集。
+
+    每个样本的输入特征最晚截至起点 t，标签是 t+1；边界按标签日期判断，
+    避免跨期序列因起点在训练区间而把验证/测试目标混入训练集。均值和标准差
+    仅由训练期间的特征行及标签计算，并返回供后续复用的缩放参数。
+    """
     config.validate()
     frame = validate_prices(frame)
     if frame['instrument'].nunique() != 1:
@@ -66,7 +76,8 @@ def prepare_sequences(
         raise DifferencingError(f'Insufficient training samples: {train.sum()}')
     if validation.sum() < config.minimum_validation_samples:
         raise DifferencingError(f'Insufficient validation samples: {validation.sum()}')
-    # Scale on unique feature rows from the training period, not future sequences.
+    # 先按特征所属日期筛出训练期的原始特征行，再估算标准化参数；
+    # 不直接对重叠序列求均值，以免重复计数，也不让验证/测试期统计量泄漏进来。
     feature_train = np.asarray([
         config.train_start <= day < config.validation_start for day in days
     ]) & np.isfinite(features).all(axis=1)
@@ -117,8 +128,8 @@ def train_stock(
 
     import os
 
-    # Load statsmodels before PyTorch to avoid conflicting Intel OpenMP runtimes.
-    # Deterministic CUDA matrix operations also require this before CUDA initializes.
+    # 在导入 PyTorch 前设置 CUDA 确定性配置，并保持统计库先于 PyTorch 加载，
+    # 以降低 Intel OpenMP 运行库冲突风险；CUDA 初始化后再设置将不会生效。
     os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
     import torch
     from torch import nn
@@ -210,7 +221,8 @@ def train_stock(
                 ) from exc
             gpu_oom_fallback = True
         if gpu_oom_fallback:
-            # Leave the exception handler first so its traceback releases failed-run tensors.
+            # 先退出异常处理块，使异常回溯释放失败训练所持有的 GPU 张量；
+            # 然后清理 CUDA 缓存，再尝试双卡数据并行回退。
             torch.cuda.empty_cache()
             try:
                 best_model, best_loss, best_metadata, results = fit(use_data_parallel=True)

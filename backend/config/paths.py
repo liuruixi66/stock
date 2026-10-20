@@ -1,4 +1,4 @@
-"""Workspace paths shared by configuration, cache readers and CLI tools."""
+"""为配置、缓存读取器和命令行工具提供统一的项目目录路径。"""
 
 from pathlib import Path
 

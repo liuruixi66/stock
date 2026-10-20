@@ -1,4 +1,8 @@
-"""HTTP entrypoints for legacy screening; not registered as new routes."""
+"""旧版选股筛选 HTTP 入口。
+
+视图接收前端传入的筛选条件并委托给 `research.screening` 计算；该模块目前没有
+注册到当前 API 路由表，因此修改它不会自动让对应接口对外可用。
+"""
 
 import json
 from datetime import datetime
@@ -452,4 +456,3 @@ def advanced_analysis_api(request):
             'success': False, 
             'error': 'Only POST method allowed'
         })
-

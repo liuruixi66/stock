@@ -1,4 +1,9 @@
-"""Causal De Prado branch of arXiv:2505.19243, not a full paper replication."""
+"""实现因果约束下的分数阶差分预测研究流程。
+
+这里采用论文中的部分方法并明确保留本项目的实验设定，不声称完整复现论文。
+关键约束是训练阶段估计差分阶数、按时间切分训练/验证/测试集，并在每个预测
+起点只使用当时可获得的历史数据；调用方不应把研究结果直接视作实盘信号。
+"""
 
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -42,7 +47,11 @@ class ForecastConfig:
 def fractional_weights(
     order: float, threshold: float = 0.001, max_lags: int = 1000, tempering: float = 0.0,
 ) -> np.ndarray:
-    """Equations 22-24 and 35-36: lag zero first, fixed-width truncation."""
+    """按论文公式递推有限长度的分数阶差分权重。
+
+    从滞后 0 的单位权重开始递推；遇到绝对值小于阈值的权重时截断。
+    若达到最大滞后仍未截断则报错，避免悄悄使用不完整的滤波器。
+    """
     if (not isfinite(order) or not 0 <= order <= 1
             or not isfinite(tempering) or tempering < 0
             or not isfinite(threshold) or not 0 < threshold < 1
@@ -74,7 +83,11 @@ def fractional_difference(
 
 def invert_one_step(predicted_difference: float, past_log_prices: Sequence[float] | NDArray[np.float64],
                     weights: np.ndarray) -> float:
-    """Invert the same finite filter using only history available at the origin."""
+    """用预测起点之前的对数价格逆转有限长差分滤波。
+
+    逆变换仅读取预测时点已经可见的历史值，避免把未来价格泄漏回预测结果；
+    输入历史长度不足或含非有限值时明确失败。
+    """
     if (not isfinite(predicted_difference) or len(past_log_prices) < len(weights) - 1
             or len(weights) == 0 or weights[0] != 1 or not np.isfinite(weights).all()):
         raise DifferencingError('Invalid inverse prediction or insufficient history')
@@ -89,7 +102,11 @@ def invert_one_step(predicted_difference: float, past_log_prices: Sequence[float
 def estimate_order(
     training_log_prices: Sequence[float] | NDArray[np.float64], config: ForecastConfig,
 ) -> dict:
-    """Smallest grid order passing a 5% ADF test, training observations only."""
+    """只用训练期数据，在候选网格中选取最小的 ADF 平稳差分阶数。
+
+    每个阶数的检验状态和统计量都会保留在返回结果中；若没有候选阶数同时满足
+    5% 显著性与临界值条件，则报错，不会根据验证集或测试集补选阶数。
+    """
     from statsmodels.tsa.stattools import adfuller
 
     config.validate()
@@ -128,7 +145,11 @@ def estimate_order(
 
 
 def forecast_features(closes: pd.Series, transformed: np.ndarray) -> pd.DataFrame:
-    """Paper SMA5/10/20, RSI9/14/21, Bollinger10/2 and MACD12/26/9."""
+    """生成价格预测特征：均线、RSI、布林带和 MACD。
+
+    参数窗口分别为 SMA(5/10/20)、RSI(9/14/21)、布林带(10, 2 倍标准差)
+    和 MACD(12/26/9)；同时保留分数阶差分序列作为输入特征。
+    """
     if not np.isfinite(closes).all() or (closes <= 0).any():
         raise DifferencingError('Features require finite positive adjusted closes')
     frame = pd.DataFrame({'differenced': transformed}, index=closes.index)
@@ -153,7 +174,12 @@ def forecast_features(closes: pd.Series, transformed: np.ndarray) -> pd.DataFram
 
 
 class HistoricalTopThirty:
-    """Use the latest complete snapshot strictly before the signal date."""
+    """按信号日前最近一份完整的上证 50 权重快照确定历史前 30 成分股。
+
+    快照必须包含 50 个有效成分且权重合计符合百分比或小数表示；查询时只接受
+    严格早于信号日、并且没有超过允许最大时效的快照，避免使用当日收盘后才
+    发布的数据产生前视偏差。
+    """
 
     def __init__(self, frame: pd.DataFrame, maximum_age_days: int = 35):
         required = {'date', 'instrument', 'member_code', 'weight'}
@@ -211,7 +237,11 @@ class HistoricalTopThirty:
 
 
 class FixedRandomThirty:
-    """Current constituents projected backwards: exploratory, survivorship biased."""
+    """将当前成分股随机抽样后回投历史的探索性样本。
+
+    该方法存在明显幸存者偏差，只能用于实验对照，不能用于证明历史策略可交易。
+    类会校验清单中的种子和抽样结果，确保同一清单可复现。
+    """
 
     def __init__(self, manifest: dict):
         if (manifest.get('mode') != 'current_sse50_random30'
@@ -244,7 +274,11 @@ class FixedRandomThirty:
 
 
 class DatabaseRandomUniverse:
-    """A reproducible sample of database stocks, projected across the test period."""
+    """将数据库筛选出的随机股票样本固定用于测试期的可复现实验宇宙。
+
+    成分不会随日期变化，因此该样本适合固定条件的算法比较；它不等同于按历史
+    成分变化重建的真实指数，也不能消除数据库样本构造产生的幸存者偏差。
+    """
 
     def __init__(
         self, selected: Sequence[str], selection_date: date, seed: int, eligible_count: int,
@@ -272,7 +306,11 @@ class DatabaseRandomUniverse:
 
 
 def long_only_signal(predicted_return: float, previous: bool, threshold: float) -> bool:
-    """Equation 47; retain the existing position inside the transaction-cost band."""
+    """根据预测收益和成本阈值产生多头/空仓状态。
+
+    预测收益高于正阈值时持有，低于负阈值时退出；落在交易成本带内时沿用
+    上一期状态，避免因微小预测波动频繁换手。
+    """
     if (not isfinite(predicted_return) or not isfinite(threshold)
             or not 0 < threshold < 1):
         raise DifferencingError('Invalid forecast return or cost threshold')
@@ -312,11 +350,11 @@ def simulate_long_only(
     buy_cost: float = 0.0005, sell_cost: float = 0.001,
     signal_threshold: float = 0.002, benchmark: bool = False,
 ) -> dict:
-    """Continuous adjusted-price research portfolio, NOT an A-share fill simulator.
+    """构造连续复权价格研究组合，不是 A 股真实成交模拟器。
 
-    Close-time signals execute no earlier than the next supplied daily open.
-    Thirty fixed allocation slots; unused slots stay cash. Missing/untradeable
-    held prices stop the experiment rather than fabricating a fill.
+    收盘后产生的信号最早只能在输入数据中的下一交易日开盘执行；组合最多使用
+    30 个固定配置槽位，未启用槽位保留为现金。持仓行情缺失或不可交易时停止实验，
+    不伪造成交价。该模型没有模拟整数手、T+1、涨跌停和实际券商撮合。
     """
     prices = validate_prices(prices)
     if (not start <= end or not isfinite(initial_capital) or initial_capital <= 0
