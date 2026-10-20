@@ -82,8 +82,8 @@ TEXT_VALUES = {
         '单层PyTorch LSTM，优先GPU 0，单卡显存不足后使用GPU 0和1，仅CUDA不可用时使用CPU。',
     'Hidden16/32, best validation epoch, no test-time fitting.':
         '隐藏单元16或32，按验证误差选择最佳轮次，测试期间不拟合。',
-    'The test interval is ten years by default; exact split dates are recorded in parameters.':
-        '默认测试区间十年，具体划分日期见实验参数。',
+    'The final model is refit on training and validation samples before testing; exact split dates are recorded in parameters.':
+        '测试前使用训练集与验证集样本重新拟合最终模型，具体区间见实验参数。',
     'Daily equal allocation slots; no reallocation of inactive slots, 95% max exposure.':
         '每日等额配置，未启用的份额保留现金，目标最大仓位95%。',
     'Research costs cannot replace actual A-share commissions or execution rules.':

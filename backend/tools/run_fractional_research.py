@@ -100,7 +100,7 @@ def run(args) -> dict:
             'ADF grid 0.05, truncation 0.001, AIC lag selection are disclosed implementation settings.',
             'Single-layer PyTorch LSTM; CUDA GPU 0 first, GPU 0+1 after single-GPU OOM, CPU only when CUDA is unavailable.',
             'Hidden16/32, best validation epoch, no test-time fitting.',
-            'The test interval is ten years by default; exact split dates are recorded in parameters.',
+            'The final model is refit on training and validation samples before testing; exact split dates are recorded in parameters.',
             'Daily equal allocation slots; no reallocation of inactive slots, 95% max exposure.',
             'Research costs cannot replace actual A-share commissions or execution rules.',
             'Only a research simulator; actual stock execution must be validated separately.',
@@ -120,9 +120,9 @@ def main() -> None:
     parser.add_argument('--seed', type=int, default=42,
                         help='Stock-sample seed; model initialization stays fixed at 42')
     parser.add_argument('--universe-size', type=int, default=30)
-    parser.add_argument('--train-start', type=date.fromisoformat, default=date(2006, 10, 16))
-    parser.add_argument('--validation-start', type=date.fromisoformat, default=date(2014, 10, 14))
-    parser.add_argument('--test-start', type=date.fromisoformat, default=date(2016, 10, 14))
+    parser.add_argument('--train-start', type=date.fromisoformat, default=date(2023, 1, 1))
+    parser.add_argument('--validation-start', type=date.fromisoformat, default=date(2024, 1, 1))
+    parser.add_argument('--test-start', type=date.fromisoformat, default=date(2025, 1, 1))
     parser.add_argument('--test-end', type=date.fromisoformat, default=date(2026, 10, 14))
     parser.add_argument('--capital', type=float, default=100000)
     parser.add_argument('--epochs', type=int, default=30)

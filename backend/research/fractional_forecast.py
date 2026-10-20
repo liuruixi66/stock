@@ -21,10 +21,10 @@ class DifferencingError(ValueError):
 
 @dataclass(frozen=True)
 class ForecastConfig:
-    train_start: date = date(2014, 1, 1)
-    validation_start: date = date(2022, 4, 1)
-    test_start: date = date(2024, 4, 1)
-    test_end: date = date(2026, 4, 30)
+    train_start: date = date(2023, 1, 1)
+    validation_start: date = date(2024, 1, 1)
+    test_start: date = date(2025, 1, 1)
+    test_end: date = date(2026, 10, 14)
     sequence_length: int = 20
     weight_threshold: float = 0.001
     max_lags: int = 1000

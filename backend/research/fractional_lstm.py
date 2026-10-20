@@ -1,8 +1,8 @@
 """按时间顺序训练和评估 LSTM 预测模型的研究实验。
 
-训练、验证和测试数据按目标日期切分，标准化参数仅从训练期计算；模型参数、
-随机种子和运行结果会保留，以便复现实验。该模块用于研究预测误差，不直接连接
-交易账户，也不应把测试集表现解释为未来收益保证。
+训练、验证和测试数据按目标日期切分。验证标签只用于模型选择，不参与梯度更新；
+测试开始前用训练和验证数据重新拟合，测试数据只用于预测评分。该模块用于研究
+预测误差，不直接连接交易账户，也不应把测试集表现解释为未来收益保证。
 """
 
 from dataclasses import asdict, dataclass
@@ -40,8 +40,8 @@ def prepare_sequences(
     """构造一步预测序列，并按目标日期划分训练、验证和测试集。
 
     每个样本的输入特征最晚截至起点 t，标签是 t+1；边界按标签日期判断，
-    避免跨期序列因起点在训练区间而把验证/测试目标混入训练集。均值和标准差
-    仅由训练期间的特征行及标签计算，并返回供后续复用的缩放参数。
+    避免跨期序列因起点在训练区间而把验证/测试目标混入训练集。验证标签只在
+    训练完成后用于评估和选 epoch，不进入训练梯度；此处缩放参数仅由训练期计算。
     """
     config.validate()
     frame = validate_prices(frame)
@@ -90,6 +90,7 @@ def prepare_sequences(
     return {
         'x': ((x - x_mean) / x_scale).astype(np.float32),
         'y': ((y - y_mean) / y_scale).astype(np.float32),
+        'raw_x': x, 'raw_y': y, 'features': features,
         'train': train, 'validation': validation, 'test': test,
         'origins': np.asarray(origins), 'target_dates': target_days, 'dates': days,
         'logs': logs, 'weights': weights,
@@ -184,6 +185,7 @@ def train_stock(
                 validation_inputs = x[validation_indices]
                 if device.type == 'cuda' and not use_data_parallel:
                     validation_inputs = validation_inputs.to(device)
+                # 验证标签只计算留出误差以选模型/epoch，不参与反向传播。
                 with torch.no_grad():
                     validation_loss = float(loss_function(
                         model(validation_inputs), y[validation_indices].to(device),
@@ -237,6 +239,46 @@ def train_stock(
 
     if best_model is None or best_metadata is None:
         raise DifferencingError('No trained model selected')
+
+    refit_mask = data['train'] | data['validation']
+    refit_indices = np.flatnonzero(refit_mask)
+    feature_fit = np.asarray([
+        config.train_start <= day < config.test_start for day in data['dates']
+    ]) & np.isfinite(data['features']).all(axis=1)
+    x_mean = data['features'][feature_fit].mean(axis=0)
+    x_scale = data['features'][feature_fit].std(axis=0)
+    x_scale[x_scale < 1e-12] = 1.0
+    y_mean = float(data['raw_y'][refit_mask].mean())
+    y_scale = float(data['raw_y'][refit_mask].std())
+    if y_scale < 1e-12:
+        raise DifferencingError('Pre-test targets are constant')
+    x = torch.from_numpy(((data['raw_x'] - x_mean) / x_scale).astype(np.float32))
+    y = torch.from_numpy(((data['raw_y'] - y_mean) / y_scale).astype(np.float32))
+    final_trial = trials[int(best_metadata['trial_index'])]
+    torch.manual_seed(seed)
+    final_model = Network(x.shape[-1], final_trial.hidden_size).to(device)
+    if used_data_parallel:
+        final_model = nn.DataParallel(final_model, device_ids=[0, 1])
+    optimizer = torch.optim.Adam(final_model.parameters(), lr=final_trial.learning_rate)
+    for _ in range(int(best_metadata['epoch'])):
+        final_model.train()
+        for batch in torch.from_numpy(refit_indices).split(final_trial.batch_size):
+            inputs = x[batch]
+            if device.type == 'cuda' and not used_data_parallel:
+                inputs = inputs.to(device)
+            targets = y[batch].to(device)
+            optimizer.zero_grad()
+            loss = loss_function(final_model(inputs), targets)
+            if not torch.isfinite(loss):
+                raise DifferencingError(f'Non-finite refit loss for {symbol}')
+            loss.backward()
+            optimizer.step()
+    final_model.eval()
+    unwrapped = final_model.module if isinstance(final_model, nn.DataParallel) else final_model
+    best_model = {
+        name: value.detach().cpu().clone()
+        for name, value in unwrapped.state_dict().items()
+    }
     model = Network(x.shape[-1], best_metadata['hidden_size']).to(device)
     model.load_state_dict(best_model)
     model.eval()
@@ -248,7 +290,7 @@ def train_stock(
             if not len(batch):
                 continue
             output = model(x[torch.from_numpy(batch)].to(device)).detach().cpu().numpy()
-            differences = output * data['y_scale'] + data['y_mean']
+            differences = output * y_scale + y_mean
             for index, prediction in zip(batch, differences):
                 origin = int(data['origins'][index])
                 log_price = invert_one_step(float(prediction), data['logs'][:origin + 1], data['weights'])
@@ -262,6 +304,7 @@ def train_stock(
     metadata = {
         'instrument': symbol, 'method': method, 'order_details': order_details,
         'sample_counts': {name: int(data[name].sum()) for name in ('train', 'validation', 'test')},
+        'final_fit_samples': int(refit_mask.sum()),
         'selected_model': best_metadata, 'validation_mse_scaled': best_loss,
         'test_return_mae': float(np.mean(price_errors)) if price_errors else None,
         'trials': results, 'seed': seed,
@@ -272,8 +315,8 @@ def train_stock(
         'gpu_oom_fallback': gpu_oom_fallback,
         'model': {name: tensor.tolist() for name, tensor in best_model.items()},
         'scaler': {
-            'x_mean': data['x_mean'].tolist(), 'x_scale': data['x_scale'].tolist(),
-            'y_mean': data['y_mean'], 'y_scale': data['y_scale'],
+            'x_mean': x_mean.tolist(), 'x_scale': x_scale.tolist(),
+            'y_mean': y_mean, 'y_scale': y_scale,
         },
         'weights': data['weights'].tolist(),
         'config': {name: value.isoformat() if isinstance(value, date) else value
