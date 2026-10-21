@@ -15,8 +15,8 @@ python -m tools.run_fractional_research --output ./fractional-lstm-results.json
 验证窗口长度可通过 `--walk-forward-validation-days` 调整。由于每天都要重新选型和训练，本实验的计算量会显著高于
 “训练一次、批量预测整个测试区间”的方式。
 
-拥有多张 CUDA 显卡时，可用 `--parallel-gpus` 并行训练不同股票，每张卡运行一个独立进程；单个小型 LSTM 不做多卡切分，
-以避免通信开销。示例：
+可用 `--parallel-gpus` 和 `--workers-per-gpu` 并行训练不同股票；单个小型 LSTM 不做多卡切分，以避免通信开销。
+适当增加每张卡的进程数可能提升 GPU 利用率，但会增加显存占用，速度提升取决于硬件负载。示例：
 
 ```sh
 python -m tools.run_fractional_research \
@@ -28,6 +28,8 @@ python -m tools.run_fractional_research \
   --test-end 2026-10-14 \
   --walk-forward-validation-days 60 \
   --epochs 30 \
+  --workers-per-gpu 2 \
+  --parallel-gpus 2 \
   --output ./fractional-lstm-results-seed-45-current-fees-zh.json
 ```
 

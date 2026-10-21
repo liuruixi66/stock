@@ -40,7 +40,10 @@ def run(args) -> dict:
     config.validate()
     if isinstance(args.parallel_gpus, bool) or args.parallel_gpus < 1:
         raise DifferencingError('--parallel-gpus must be a positive integer')
-    if args.parallel_gpus > 1:
+    if isinstance(args.workers_per_gpu, bool) or args.workers_per_gpu < 1:
+        raise DifferencingError('--workers-per-gpu must be a positive integer')
+    parallel_mode = args.parallel_gpus > 1 or args.workers_per_gpu > 1
+    if parallel_mode:
         import torch
 
         available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
@@ -60,10 +63,10 @@ def run(args) -> dict:
     trial_settings = [LSTMTrial(hidden_size=size, epochs=args.epochs) for size in (16, 32)]
     print(
         f'Starting {len(candidates)} stocks, {len(predictions)} methods, '
-        f'{args.parallel_gpus} GPU worker(s)',
+        f'{args.parallel_gpus} GPU(s) x {args.workers_per_gpu} worker(s) per GPU',
         flush=True,
     )
-    if args.parallel_gpus == 1:
+    if not parallel_mode:
         for symbol in candidates:
             stock = prices[prices['instrument'] == symbol]
             trained_symbol, method_results = _train_symbol(
@@ -76,7 +79,9 @@ def run(args) -> dict:
     else:
         with ExitStack() as stack:
             workers = [
-                stack.enter_context(ProcessPoolExecutor(max_workers=1))
+                stack.enter_context(
+                    ProcessPoolExecutor(max_workers=args.workers_per_gpu),
+                )
                 for _ in range(args.parallel_gpus)
             ]
             future_jobs = {}
@@ -149,6 +154,7 @@ def run(args) -> dict:
             'model_seed': 42,
             'universe_size': args.universe_size,
             'parallel_gpus': args.parallel_gpus,
+            'workers_per_gpu': args.workers_per_gpu,
             'walk_forward_validation_days': args.walk_forward_validation_days,
             'buy_cost': args.buy_cost,
             'sell_cost': args.sell_cost,
@@ -202,7 +208,11 @@ def main() -> None:
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument(
         '--parallel-gpus', type=int, default=1,
-        help='Train independent stocks concurrently, one worker per GPU (default: 1)',
+        help='Train independent stocks on this many GPUs (default: 1)',
+    )
+    parser.add_argument(
+        '--workers-per-gpu', type=int, default=1,
+        help='Concurrent stock-training processes per GPU (default: 1)',
     )
     parser.add_argument('--buy-cost', type=float, default=0.0005)
     parser.add_argument('--sell-cost', type=float, default=0.001)
