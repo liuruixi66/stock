@@ -15,6 +15,25 @@ python -m tools.run_fractional_research --output ./fractional-lstm-results.json
 验证窗口长度可通过 `--walk-forward-validation-days` 调整。由于每天都要重新选型和训练，本实验的计算量会显著高于
 “训练一次、批量预测整个测试区间”的方式。
 
+拥有多张 CUDA 显卡时，可用 `--parallel-gpus` 并行训练不同股票，每张卡运行一个独立进程；单个小型 LSTM 不做多卡切分，
+以避免通信开销。示例：
+
+```sh
+python -m tools.run_fractional_research \
+  --parallel-gpus 2 \
+  --seed 45 \
+  --train-start 2006-10-16 \
+  --validation-start 2014-10-14 \
+  --test-start 2016-10-14 \
+  --test-end 2026-10-14 \
+  --walk-forward-validation-days 60 \
+  --epochs 30 \
+  --output ./fractional-lstm-results-seed-45-current-fees-zh.json
+```
+
+运行时会显示每只股票、预测方法的逐100日进度、当前设备、耗时和当前股票方法的剩余时间估算，以及股票完成数量。
+并行模式不会覆盖已有结果；如单卡内存不足，会明确报错，不会挪用另一张正用于并行训练的 GPU。
+
 ## 交易费用敏感性复算
 
 复用已保存的预测结果进行复算，无需重新训练：

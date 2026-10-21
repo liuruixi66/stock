@@ -8,6 +8,7 @@
 from dataclasses import asdict, dataclass
 from datetime import date
 from math import exp
+import time
 from typing import Sequence
 
 import numpy as np
@@ -102,6 +103,7 @@ def train_stock(
     frame: pd.DataFrame, config: ForecastConfig, method: str,
     trials: Sequence[LSTMTrial] | None = None, seed: int = 42,
     walk_forward_validation_days: int = 60,
+    device_index: int | None = None,
 ) -> tuple[dict, dict[tuple[date, str], float]]:
     """逐预测日执行滚动选型、历史重训和下一交易日预测。"""
     config.validate()
@@ -146,7 +148,16 @@ def train_stock(
     torch.set_num_threads(1)
     torch.use_deterministic_algorithms(True)
     gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    device = torch.device('cuda:0' if gpu_count else 'cpu')
+    if device_index is None:
+        device = torch.device('cuda:0' if gpu_count else 'cpu')
+    else:
+        if (isinstance(device_index, bool) or not isinstance(device_index, int)
+                or device_index < 0 or device_index >= gpu_count):
+            raise DifferencingError(
+                f'GPU index {device_index} is unavailable; detected {gpu_count} CUDA devices',
+            )
+        device = torch.device(f'cuda:{device_index}')
+        torch.cuda.set_device(device)
 
     class Network(nn.Module):
         def __init__(self, features: int, hidden: int):
@@ -229,6 +240,12 @@ def train_stock(
     selection_counts = {str(index): 0 for index in range(len(trials))}
     used_data_parallel_any = False
     gpu_oom_fallback_any = False
+    started_at = time.perf_counter()
+    print(
+        f'[{device}] Starting {symbol} {method}: '
+        f'{len(forecast_indices)} walk-forward predictions',
+        flush=True,
+    )
     last_model = None
     last_scaler = None
     last_metadata = None
@@ -277,10 +294,10 @@ def train_stock(
                 use_data_parallel=False,
             )
         except torch.cuda.OutOfMemoryError as exc:
-            if gpu_count < 2:
+            if device_index is not None or gpu_count < 2:
                 raise DifferencingError(
                     f'LSTM ran out of memory before {target_day}; '
-                    'reduce the batch size or model size',
+                    'reduce the batch size or model size; parallel GPU workers do not share devices',
                 ) from exc
             gpu_oom_fallback_any = True
             torch.cuda.empty_cache()
@@ -367,6 +384,17 @@ def train_stock(
             'selected_epoch': int(best_metadata['epoch']),
             'validation_mse_scaled': best_loss,
         })
+        completed = len(predictions)
+        if completed % 100 == 0 or completed == len(forecast_indices):
+            elapsed = time.perf_counter() - started_at
+            rate = completed / elapsed if elapsed > 0 else 0.0
+            remaining = (len(forecast_indices) - completed) / rate if rate > 0 else 0.0
+            print(
+                f'[{device}] {symbol} {method}: {completed}/{len(forecast_indices)} '
+                f'predictions; latest={target_day}; elapsed={elapsed / 60:.1f}m; '
+                f'estimated_remaining={remaining / 60:.1f}m',
+                flush=True,
+            )
 
     if last_model is None or last_metadata is None or last_scaler is None:
         raise DifferencingError('No walk-forward model was trained')

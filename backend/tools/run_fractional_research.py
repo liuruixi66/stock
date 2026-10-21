@@ -1,6 +1,8 @@
 """Run the database-backed Shanghai-stock LSTM research experiment."""
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import ExitStack
 from datetime import date
 import json
 import logging
@@ -15,12 +17,38 @@ from research.fractional_lstm import LSTMTrial, train_stock
 from research.fractional_results import chinese_result
 
 
+def _train_symbol(
+    stock, config, methods, trial_settings, walk_forward_validation_days, device_index,
+):
+    symbol = str(stock['instrument'].iloc[0])
+    method_results = {}
+    for method in methods:
+        metadata, forecasts = train_stock(
+            stock, config, method, trial_settings, seed=42,
+            walk_forward_validation_days=walk_forward_validation_days,
+            device_index=device_index,
+        )
+        method_results[method] = (metadata, forecasts)
+    return symbol, method_results
+
+
 def run(args) -> dict:
     config = ForecastConfig(
         train_start=args.train_start, validation_start=args.validation_start,
         test_start=args.test_start, test_end=args.test_end,
     )
     config.validate()
+    if isinstance(args.parallel_gpus, bool) or args.parallel_gpus < 1:
+        raise DifferencingError('--parallel-gpus must be a positive integer')
+    if args.parallel_gpus > 1:
+        import torch
+
+        available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        if args.parallel_gpus > available_gpus:
+            raise DifferencingError(
+                f'--parallel-gpus requested {args.parallel_gpus}, but only '
+                f'{available_gpus} CUDA devices are available',
+            )
     if args.output.exists():
         raise DifferencingError('Refusing to overwrite an existing experiment')
     prices, universe, provenance = load_fractional_database(
@@ -30,16 +58,54 @@ def run(args) -> dict:
     models = {}
     predictions = {'de_prado': {}, 'log_return': {}}
     trial_settings = [LSTMTrial(hidden_size=size, epochs=args.epochs) for size in (16, 32)]
-    for symbol in candidates:
-        stock = prices[prices['instrument'] == symbol]
-        for method in predictions:
-            print(f'Training {symbol} {method} using pre-test data', flush=True)
-            metadata, forecasts = train_stock(
-                stock, config, method, trial_settings,
-                walk_forward_validation_days=args.walk_forward_validation_days,
+    print(
+        f'Starting {len(candidates)} stocks, {len(predictions)} methods, '
+        f'{args.parallel_gpus} GPU worker(s)',
+        flush=True,
+    )
+    if args.parallel_gpus == 1:
+        for symbol in candidates:
+            stock = prices[prices['instrument'] == symbol]
+            trained_symbol, method_results = _train_symbol(
+                stock, config, tuple(predictions), trial_settings,
+                args.walk_forward_validation_days, None,
             )
-            models[f'{symbol}:{method}'] = metadata
-            predictions[method].update(forecasts)
+            for method, (metadata, forecasts) in method_results.items():
+                models[f'{trained_symbol}:{method}'] = metadata
+                predictions[method].update(forecasts)
+    else:
+        with ExitStack() as stack:
+            workers = [
+                stack.enter_context(ProcessPoolExecutor(max_workers=1))
+                for _ in range(args.parallel_gpus)
+            ]
+            future_jobs = {}
+            for index, symbol in enumerate(candidates):
+                gpu_index = index % args.parallel_gpus
+                stock = prices[prices['instrument'] == symbol].copy()
+                future = workers[gpu_index].submit(
+                    _train_symbol, stock, config, tuple(predictions), trial_settings,
+                    args.walk_forward_validation_days, gpu_index,
+                )
+                future_jobs[future] = (symbol, gpu_index)
+
+            completed = 0
+            for future in as_completed(future_jobs):
+                expected_symbol, gpu_index = future_jobs[future]
+                trained_symbol, method_results = future.result()
+                if trained_symbol != expected_symbol:
+                    raise DifferencingError(
+                        f'Worker for {expected_symbol} returned {trained_symbol}',
+                    )
+                for method, (metadata, forecasts) in method_results.items():
+                    models[f'{trained_symbol}:{method}'] = metadata
+                    predictions[method].update(forecasts)
+                completed += 1
+                print(
+                    f'Completed stock {completed}/{len(candidates)}: {trained_symbol} '
+                    f'(GPU {gpu_index})',
+                    flush=True,
+                )
 
     runs = {}
     for method, forecasts in predictions.items():
@@ -82,6 +148,7 @@ def run(args) -> dict:
             'seed': args.seed,
             'model_seed': 42,
             'universe_size': args.universe_size,
+            'parallel_gpus': args.parallel_gpus,
             'walk_forward_validation_days': args.walk_forward_validation_days,
             'buy_cost': args.buy_cost,
             'sell_cost': args.sell_cost,
@@ -102,7 +169,7 @@ def run(args) -> dict:
             'Database adjusted-close ratios are applied to OHLC prices.',
             'De Prado and first-difference branches only; no ARFIMA/ARTFIMA R estimator replication.',
             'ADF grid 0.05, truncation 0.001, AIC lag selection are disclosed implementation settings.',
-            'Single-layer PyTorch LSTM; CUDA GPU 0 first, GPU 0+1 after single-GPU OOM, CPU only when CUDA is unavailable.',
+            'Single-layer PyTorch LSTM; independent-stock GPU workers are used only when --parallel-gpus exceeds 1.',
             'Hidden16/32, daily walk-forward model/epoch selection on the preceding 60 labeled samples; every prediction is fit only on data before its target date.',
             'Daily equal allocation slots; no reallocation of inactive slots, 95% max exposure.',
             'Research costs cannot replace actual A-share commissions or execution rules.',
@@ -133,6 +200,10 @@ def main() -> None:
     parser.add_argument('--test-end', type=date.fromisoformat, default=date(2026, 10, 14))
     parser.add_argument('--capital', type=float, default=100000)
     parser.add_argument('--epochs', type=int, default=30)
+    parser.add_argument(
+        '--parallel-gpus', type=int, default=1,
+        help='Train independent stocks concurrently, one worker per GPU (default: 1)',
+    )
     parser.add_argument('--buy-cost', type=float, default=0.0005)
     parser.add_argument('--sell-cost', type=float, default=0.001)
     parser.add_argument('--signal-threshold', type=float, default=0.002)
