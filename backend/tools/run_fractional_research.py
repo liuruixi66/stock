@@ -4,8 +4,11 @@ import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import ExitStack
 from datetime import date
+import hashlib
 import json
 import logging
+import math
+import os
 from pathlib import Path
 
 from config.settings import STOCKS_DATABASE_PATH
@@ -15,6 +18,130 @@ from research.fractional_forecast import (
 )
 from research.fractional_lstm import LSTMTrial, train_stock
 from research.fractional_results import chinese_result
+
+
+CHECKPOINT_VERSION = 1
+METHODS = ('de_prado', 'log_return')
+
+
+def _checkpoint_signature(args) -> str:
+    database = args.database.expanduser().resolve()
+    stat = database.stat()
+    parameters = {
+        'database': str(database),
+        'database_size': stat.st_size,
+        'database_mtime_ns': stat.st_mtime_ns,
+        'seed': args.seed,
+        'universe_size': args.universe_size,
+        'train_start': args.train_start.isoformat(),
+        'validation_start': args.validation_start.isoformat(),
+        'test_start': args.test_start.isoformat(),
+        'test_end': args.test_end.isoformat(),
+        'walk_forward_validation_days': args.walk_forward_validation_days,
+        'epochs': args.epochs,
+        'capital': args.capital,
+        'buy_cost': args.buy_cost,
+        'sell_cost': args.sell_cost,
+        'signal_threshold': args.signal_threshold,
+        'model_seed': 42,
+        'methods': METHODS,
+        'hidden_sizes': (16, 32),
+    }
+    serialized = json.dumps(parameters, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+
+
+def _checkpoint_path(output: Path) -> Path:
+    return output.with_name(output.name + '.progress.jsonl')
+
+
+def _restore_checkpoint(path: Path, signature: str):
+    models = {}
+    predictions = {method: {} for method in METHODS}
+    completed = set()
+    if not path.exists():
+        with path.open('x', encoding='utf-8') as checkpoint:
+            checkpoint.write(json.dumps({
+                'type': 'header', 'version': CHECKPOINT_VERSION,
+                'signature': signature,
+            }, separators=(',', ':')) + '\n')
+            checkpoint.flush()
+            os.fsync(checkpoint.fileno())
+        return models, predictions, completed
+
+    with path.open('r', encoding='utf-8') as checkpoint:
+        first_line = checkpoint.readline()
+        try:
+            header = json.loads(first_line)
+        except json.JSONDecodeError as exc:
+            raise DifferencingError(f'Invalid checkpoint header in {path}') from exc
+        if (header.get('type') != 'header'
+                or header.get('version') != CHECKPOINT_VERSION
+                or header.get('signature') != signature):
+            raise DifferencingError(
+                f'Checkpoint does not match this experiment: {path}',
+            )
+        for line_number, line in enumerate(checkpoint, start=2):
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise DifferencingError(
+                    f'Invalid checkpoint record at {path}:{line_number}',
+                ) from exc
+            symbol = entry.get('symbol')
+            method_results = entry.get('methods')
+            if (entry.get('type') != 'stock' or not isinstance(symbol, str)
+                    or not symbol or symbol in completed
+                    or not isinstance(method_results, dict)
+                    or set(method_results) != set(METHODS)):
+                raise DifferencingError(
+                    f'Invalid or duplicate stock checkpoint at {path}:{line_number}',
+                )
+            for method in METHODS:
+                result = method_results[method]
+                if not isinstance(result.get('metadata'), dict):
+                    raise DifferencingError(
+                        f'Missing model metadata at {path}:{line_number}',
+                    )
+                models[f'{symbol}:{method}'] = result['metadata']
+                for item in result.get('forecasts', []):
+                    day = date.fromisoformat(item['date'])
+                    forecast_symbol = item['instrument']
+                    value = float(item['predicted_return'])
+                    if forecast_symbol != symbol or not math.isfinite(value):
+                        raise DifferencingError(
+                            f'Invalid forecast in checkpoint at {path}:{line_number}',
+                        )
+                    predictions[method][(day, symbol)] = value
+            completed.add(symbol)
+    return models, predictions, completed
+
+
+def _append_checkpoint(path: Path, symbol: str, method_results: dict) -> None:
+    entry = {
+        'type': 'stock',
+        'symbol': symbol,
+        'methods': {
+            method: {
+                'metadata': metadata,
+                'forecasts': [
+                    {
+                        'date': day.isoformat(),
+                        'instrument': forecast_symbol,
+                        'predicted_return': value,
+                    }
+                    for (day, forecast_symbol), value in sorted(forecasts.items())
+                ],
+            }
+            for method, (metadata, forecasts) in method_results.items()
+        },
+    }
+    with path.open('a', encoding='utf-8') as checkpoint:
+        checkpoint.write(json.dumps(
+            entry, ensure_ascii=False, allow_nan=False, separators=(',', ':'),
+        ) + '\n')
+        checkpoint.flush()
+        os.fsync(checkpoint.fileno())
 
 
 def _train_symbol(
@@ -59,15 +186,25 @@ def run(args) -> dict:
     )
     candidates = universe.members_between(config.test_start, config.test_end)
     models = {}
-    predictions = {'de_prado': {}, 'log_return': {}}
+    checkpoint = _checkpoint_path(args.output)
+    models, predictions, completed_symbols = _restore_checkpoint(
+        checkpoint, _checkpoint_signature(args),
+    )
+    if not completed_symbols <= set(candidates):
+        raise DifferencingError(
+            'Checkpoint contains symbols outside the selected stock universe',
+        )
     trial_settings = [LSTMTrial(hidden_size=size, epochs=args.epochs) for size in (16, 32)]
     print(
-        f'Starting {len(candidates)} stocks, {len(predictions)} methods, '
+        f'Resuming {len(completed_symbols)}/{len(candidates)} stocks; '
+        f'{len(predictions)} methods, '
         f'{args.parallel_gpus} GPU(s) x {args.workers_per_gpu} worker(s) per GPU',
         flush=True,
     )
     if not parallel_mode:
         for symbol in candidates:
+            if symbol in completed_symbols:
+                continue
             stock = prices[prices['instrument'] == symbol]
             trained_symbol, method_results = _train_symbol(
                 stock, config, tuple(predictions), trial_settings,
@@ -76,6 +213,13 @@ def run(args) -> dict:
             for method, (metadata, forecasts) in method_results.items():
                 models[f'{trained_symbol}:{method}'] = metadata
                 predictions[method].update(forecasts)
+            _append_checkpoint(checkpoint, trained_symbol, method_results)
+            completed_symbols.add(trained_symbol)
+            print(
+                f'Completed stock {len(completed_symbols)}/{len(candidates)}: '
+                f'{trained_symbol}',
+                flush=True,
+            )
     else:
         with ExitStack() as stack:
             workers = [
@@ -86,6 +230,8 @@ def run(args) -> dict:
             ]
             future_jobs = {}
             for index, symbol in enumerate(candidates):
+                if symbol in completed_symbols:
+                    continue
                 gpu_index = index % args.parallel_gpus
                 stock = prices[prices['instrument'] == symbol].copy()
                 future = workers[gpu_index].submit(
@@ -105,9 +251,11 @@ def run(args) -> dict:
                 for method, (metadata, forecasts) in method_results.items():
                     models[f'{trained_symbol}:{method}'] = metadata
                     predictions[method].update(forecasts)
+                _append_checkpoint(checkpoint, trained_symbol, method_results)
+                completed_symbols.add(trained_symbol)
                 completed += 1
                 print(
-                    f'Completed stock {completed}/{len(candidates)}: {trained_symbol} '
+                    f'Completed stock {len(completed_symbols)}/{len(candidates)}: {trained_symbol} '
                     f'(GPU {gpu_index})',
                     flush=True,
                 )
@@ -222,6 +370,7 @@ def main() -> None:
         result = run(args)
         with args.output.open('x', encoding='utf-8') as output:
             json.dump(chinese_result(result), output, ensure_ascii=False, allow_nan=False, indent=2)
+        _checkpoint_path(args.output).unlink()
     except (OSError, ValueError, ImportError) as exc:
         parser.exit(1, f'Research stopped: {exc}\n')
     print(f'Research result: {args.output}')

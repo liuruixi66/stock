@@ -180,8 +180,6 @@ def train_stock(
         best_validation_loss = float('inf')
         selected_trial = None
         trial_results = []
-        if device.type == 'cuda':
-            torch.cuda.empty_cache()
         for trial_index, trial in enumerate(trials):
             torch.manual_seed(seed)
             model = Network(x.shape[-1], trial.hidden_size).to(device)
@@ -193,9 +191,7 @@ def train_stock(
                 model.train()
                 for batch in train_indices.split(trial.batch_size):
                     inputs = x[batch]
-                    if device.type == 'cuda' and not use_data_parallel:
-                        inputs = inputs.to(device)
-                    targets = y[batch].to(device)
+                    targets = y[batch]
                     optimizer.zero_grad()
                     loss = loss_function(model(inputs), targets)
                     if not torch.isfinite(loss):
@@ -204,12 +200,10 @@ def train_stock(
                     optimizer.step()
                 model.eval()
                 validation_inputs = x[validation_indices]
-                if device.type == 'cuda' and not use_data_parallel:
-                    validation_inputs = validation_inputs.to(device)
                 # 验证标签只计算留出误差以选模型/epoch，不参与反向传播。
                 with torch.no_grad():
                     validation_loss = float(loss_function(
-                        model(validation_inputs), y[validation_indices].to(device),
+                        model(validation_inputs), y[validation_indices],
                     ).item())
                 if not np.isfinite(validation_loss):
                     raise DifferencingError(f'Non-finite validation loss for {symbol}')
@@ -280,12 +274,12 @@ def train_stock(
             raise DifferencingError(f'Pre-{target_day} training targets are constant')
         selection_x = torch.from_numpy(
             ((data['raw_x'] - selection_x_mean) / selection_x_scale).astype(np.float32),
-        )
+        ).to(device)
         selection_y = torch.from_numpy(
             ((data['raw_y'] - selection_y_mean) / selection_y_scale).astype(np.float32),
-        )
-        train_indices = torch.from_numpy(train_indices_array)
-        validation_indices = torch.from_numpy(validation_indices_array)
+        ).to(device)
+        train_indices = torch.from_numpy(train_indices_array).to(device)
+        validation_indices = torch.from_numpy(validation_indices_array).to(device)
 
         used_data_parallel = False
         try:
@@ -324,8 +318,12 @@ def train_stock(
         y_scale = float(data['raw_y'][history_indices].std())
         if y_scale < 1e-12:
             raise DifferencingError(f'Pre-{target_day} refit targets are constant')
-        x = torch.from_numpy(((data['raw_x'] - x_mean) / x_scale).astype(np.float32))
-        y = torch.from_numpy(((data['raw_y'] - y_mean) / y_scale).astype(np.float32))
+        x = torch.from_numpy(
+            ((data['raw_x'] - x_mean) / x_scale).astype(np.float32),
+        ).to(device)
+        y = torch.from_numpy(
+            ((data['raw_y'] - y_mean) / y_scale).astype(np.float32),
+        ).to(device)
 
         final_trial = trials[int(best_metadata['trial_index'])]
         torch.manual_seed(seed)
@@ -334,13 +332,12 @@ def train_stock(
             final_model = nn.DataParallel(final_model, device_ids=[0, 1])
         optimizer = torch.optim.Adam(final_model.parameters(), lr=final_trial.learning_rate)
         refit_indices = torch.from_numpy(history_indices)
+        refit_indices = refit_indices.to(device)
         for _ in range(int(best_metadata['epoch'])):
             final_model.train()
             for batch in refit_indices.split(final_trial.batch_size):
                 inputs = x[batch]
-                if device.type == 'cuda' and not used_data_parallel:
-                    inputs = inputs.to(device)
-                targets = y[batch].to(device)
+                targets = y[batch]
                 optimizer.zero_grad()
                 loss = loss_function(final_model(inputs), targets)
                 if not torch.isfinite(loss):
@@ -349,7 +346,7 @@ def train_stock(
                 optimizer.step()
         final_model.eval()
         with torch.no_grad():
-            output = float(final_model(x[sample_index:sample_index + 1].to(device)).item())
+            output = float(final_model(x[sample_index:sample_index + 1]).item())
         prediction = output * y_scale + y_mean
         origin = int(data['origins'][sample_index])
         log_price = invert_one_step(

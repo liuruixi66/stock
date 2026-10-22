@@ -1,12 +1,15 @@
 from copy import deepcopy
+from datetime import date
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from django.test import SimpleTestCase
 
+from research.fractional_forecast import DifferencingError
 from research.fractional_results import chinese_result
 from tools.compare_fractional_experiments import compare
+from tools.run_fractional_research import _append_checkpoint, _restore_checkpoint
 
 
 class FractionalResultLanguageTests(SimpleTestCase):
@@ -98,3 +101,37 @@ class FractionalComparisonTests(SimpleTestCase):
                     path.write_text(json.dumps(data), encoding='utf-8')
                 with self.assertRaises(ValueError):
                     compare(paths)
+
+
+class FractionalTrainingCheckpointTests(SimpleTestCase):
+    def test_checkpoint_restores_completed_symbol_models_and_forecasts(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'progress.jsonl'
+            models, predictions, completed = _restore_checkpoint(path, 'signature')
+            self.assertEqual(completed, set())
+
+            method_results = {
+                'de_prado': (
+                    {'training_device': 'cuda:0'},
+                    {(date(2025, 1, 2), '600001.SH'): 0.01},
+                ),
+                'log_return': (
+                    {'training_device': 'cuda:1'},
+                    {(date(2025, 1, 2), '600001.SH'): -0.02},
+                ),
+            }
+            _append_checkpoint(path, '600001.SH', method_results)
+
+            models, predictions, completed = _restore_checkpoint(path, 'signature')
+            self.assertEqual(completed, {'600001.SH'})
+            self.assertEqual(models['600001.SH:de_prado']['training_device'], 'cuda:0')
+            self.assertEqual(
+                predictions['log_return'][(date(2025, 1, 2), '600001.SH')], -0.02,
+            )
+
+    def test_checkpoint_rejects_a_different_experiment_signature(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'progress.jsonl'
+            _restore_checkpoint(path, 'first')
+            with self.assertRaises(DifferencingError):
+                _restore_checkpoint(path, 'different')
