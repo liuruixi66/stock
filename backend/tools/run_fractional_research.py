@@ -20,7 +20,9 @@ from research.database_fractional import load_fractional_database
 from research.fractional_forecast import (
     DifferencingError, ForecastConfig, simulate_long_only,
 )
-from research.fractional_lstm import LSTMTrial, train_stock
+from research.fractional_lstm import (
+    LSTMTrial, evaluate_return_predictions, train_stock,
+)
 from research.fractional_results import chinese_result
 
 
@@ -170,6 +172,81 @@ def _train_symbol(
     return symbol, method_results
 
 
+def _model_evaluations(prices, predictions, backtests) -> dict:
+    actual_returns = {}
+    for symbol, rows in prices.groupby('instrument', sort=False):
+        ordered = rows.sort_values('date')
+        dates = ordered['date'].tolist()
+        closes = ordered['close'].tolist()
+        for index in range(len(dates) - 1):
+            actual_returns[(dates[index], symbol)] = closes[index + 1] / closes[index] - 1
+
+    machine_learning = {}
+    for method, forecasts in predictions.items():
+        missing_actuals = [key for key in forecasts if key not in actual_returns]
+        if missing_actuals:
+            raise DifferencingError(
+                f'{method} forecasts lack matching actual returns: {missing_actuals[:5]}',
+            )
+        actual = [actual_returns[key] for key in forecasts]
+        predicted = [forecasts[key] for key in forecasts]
+        machine_learning[method] = {
+            **evaluate_return_predictions(actual, predicted),
+            'zero_return_baseline': evaluate_return_predictions(
+                actual, [0.0] * len(actual),
+            ),
+        }
+
+    benchmark_name = 'database_random_equal_slot'
+    benchmark = backtests[benchmark_name]
+    financial = {}
+    financial_metrics = (
+        'total_return', 'annualized_return', 'max_drawdown',
+        'annualized_volatility', 'sharpe_zero_risk_free', 'costs', 'order_count',
+    )
+    for method in predictions:
+        strategy = backtests[method]
+        differences = {}
+        for metric in (
+            'total_return', 'annualized_return', 'max_drawdown',
+            'annualized_volatility', 'sharpe_zero_risk_free',
+        ):
+            strategy_value = strategy[metric]
+            benchmark_value = benchmark[metric]
+            differences[f'{metric}_difference_vs_benchmark'] = (
+                strategy_value - benchmark_value
+                if strategy_value is not None and benchmark_value is not None else None
+            )
+        financial[method] = {
+            **{metric: strategy[metric] for metric in financial_metrics},
+            'benchmark': benchmark_name,
+            'benchmark_metrics': {
+                metric: benchmark[metric] for metric in financial_metrics
+            },
+            **differences,
+        }
+
+    return {
+        'machine_learning': {
+            'evaluation_period': 'test',
+            'target': 'next_trading_day_adjusted_close_simple_return',
+            'methods': machine_learning,
+            'notes': [
+                'Metrics pool all out-of-sample stock-day forecasts; the baseline predicts zero return.',
+                'MAPE excludes exact-zero actual returns and is sensitive to small nonzero returns.',
+                'Directional accuracy compares the signs of predicted and actual returns, including zero as a separate direction.',
+            ],
+        },
+        'financial': {
+            'methods': financial,
+            'notes': [
+                'Returns and risk metrics come from the research simulator and are compared with the database random equal-slot benchmark.',
+                'These results do not model all real A-share execution constraints and are not live-trading performance.',
+            ],
+        },
+    }
+
+
 def run(args) -> dict:
     config = ForecastConfig(
         train_start=args.train_start, validation_start=args.validation_start,
@@ -296,6 +373,7 @@ def run(args) -> dict:
         sell_cost=args.sell_cost, signal_threshold=args.signal_threshold,
         benchmark=True,
     )
+    evaluations = _model_evaluations(prices, predictions, runs)
     return {
         'paper': 'https://arxiv.org/abs/2505.19243',
         'status': 'method_migration_not_exact_replication',
@@ -330,6 +408,7 @@ def run(args) -> dict:
             for method, forecasts in predictions.items()
         },
         'backtests': runs,
+        'evaluations': evaluations,
         'deviations': [
             'A seeded sample from the database replaces historical SSE50 membership; the sample has survivorship bias.',
             'Database adjusted-close ratios are applied to OHLC prices.',
