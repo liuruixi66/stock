@@ -7,12 +7,15 @@
 
 from dataclasses import asdict, dataclass
 from datetime import date
+import logging
 from math import exp
 import time
 from typing import Sequence
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from research.fractional_forecast import (
     DifferencingError, ForecastConfig, estimate_order, forecast_features,
@@ -235,10 +238,9 @@ def train_stock(
     used_data_parallel_any = False
     gpu_oom_fallback_any = False
     started_at = time.perf_counter()
-    print(
+    logger.info(
         f'[{device}] Starting {symbol} {method}: '
         f'{len(forecast_indices)} walk-forward predictions',
-        flush=True,
     )
     last_model = None
     last_scaler = None
@@ -386,11 +388,10 @@ def train_stock(
             elapsed = time.perf_counter() - started_at
             rate = completed / elapsed if elapsed > 0 else 0.0
             remaining = (len(forecast_indices) - completed) / rate if rate > 0 else 0.0
-            print(
+            logger.info(
                 f'[{device}] {symbol} {method}: {completed}/{len(forecast_indices)} '
                 f'predictions; latest={target_day}; elapsed={elapsed / 60:.1f}m; '
                 f'estimated_remaining={remaining / 60:.1f}m',
-                flush=True,
             )
 
     if last_model is None or last_metadata is None or last_scaler is None:

@@ -7,9 +7,13 @@ from datetime import date
 import hashlib
 import json
 import logging
+from logging.handlers import QueueHandler, QueueListener
 import math
+import multiprocessing
 import os
 from pathlib import Path
+import sys
+from time import strftime
 
 from config.settings import STOCKS_DATABASE_PATH
 from research.database_fractional import load_fractional_database
@@ -22,6 +26,13 @@ from research.fractional_results import chinese_result
 
 CHECKPOINT_VERSION = 1
 METHODS = ('de_prado', 'log_return')
+
+
+def _configure_worker_logging(log_queue) -> None:
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.addHandler(QueueHandler(log_queue))
+    root_logger.setLevel(logging.INFO)
 
 
 def _checkpoint_signature(args) -> str:
@@ -195,11 +206,10 @@ def run(args) -> dict:
             'Checkpoint contains symbols outside the selected stock universe',
         )
     trial_settings = [LSTMTrial(hidden_size=size, epochs=args.epochs) for size in (16, 32)]
-    print(
+    logging.info(
         f'Resuming {len(completed_symbols)}/{len(candidates)} stocks; '
         f'{len(predictions)} methods, '
         f'{args.parallel_gpus} GPU(s) x {args.workers_per_gpu} worker(s) per GPU',
-        flush=True,
     )
     if not parallel_mode:
         for symbol in candidates:
@@ -215,16 +225,19 @@ def run(args) -> dict:
                 predictions[method].update(forecasts)
             _append_checkpoint(checkpoint, trained_symbol, method_results)
             completed_symbols.add(trained_symbol)
-            print(
+            logging.info(
                 f'Completed stock {len(completed_symbols)}/{len(candidates)}: '
                 f'{trained_symbol}',
-                flush=True,
             )
     else:
         with ExitStack() as stack:
             workers = [
                 stack.enter_context(
-                    ProcessPoolExecutor(max_workers=args.workers_per_gpu),
+                    ProcessPoolExecutor(
+                        max_workers=args.workers_per_gpu,
+                        initializer=_configure_worker_logging,
+                        initargs=(args.log_queue,),
+                    ),
                 )
                 for _ in range(args.parallel_gpus)
             ]
@@ -254,10 +267,9 @@ def run(args) -> dict:
                 _append_checkpoint(checkpoint, trained_symbol, method_results)
                 completed_symbols.add(trained_symbol)
                 completed += 1
-                print(
+                logging.info(
                     f'Completed stock {len(completed_symbols)}/{len(candidates)}: {trained_symbol} '
                     f'(GPU {gpu_index})',
-                    flush=True,
                 )
 
     runs = {}
@@ -333,7 +345,6 @@ def run(args) -> dict:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         '--database', type=Path, default=STOCKS_DATABASE_PATH,
@@ -365,15 +376,42 @@ def main() -> None:
     parser.add_argument('--buy-cost', type=float, default=0.0005)
     parser.add_argument('--sell-cost', type=float, default=0.001)
     parser.add_argument('--signal-threshold', type=float, default=0.002)
+    parser.add_argument(
+        '--log-directory', type=Path,
+        default=Path(__file__).resolve().parents[1] / 'log',
+        help='Directory for timestamped training logs',
+    )
     args = parser.parse_args()
+    args.log_directory.mkdir(parents=True, exist_ok=True)
+    log_path = args.log_directory / (
+        f'fractional-research-seed-{args.seed}-{strftime("%Y%m%d-%H%M%S")}.log'
+    )
+    log_queue = multiprocessing.get_context('spawn').Queue()
+    args.log_queue = log_queue
+    log_format = logging.Formatter('%(asctime)s %(levelname)s %(processName)s %(message)s')
+    console_handler = logging.StreamHandler(sys.stdout)
+    file_handler = logging.FileHandler(log_path, encoding='utf-8')
+    console_handler.setFormatter(log_format)
+    file_handler.setFormatter(log_format)
+    listener = QueueListener(
+        log_queue, console_handler, file_handler, respect_handler_level=True,
+    )
+    listener.start()
+    _configure_worker_logging(log_queue)
+    logging.info('Training log: %s', log_path)
     try:
         result = run(args)
         with args.output.open('x', encoding='utf-8') as output:
             json.dump(chinese_result(result), output, ensure_ascii=False, allow_nan=False, indent=2)
         _checkpoint_path(args.output).unlink()
     except (OSError, ValueError, ImportError) as exc:
-        parser.exit(1, f'Research stopped: {exc}\n')
-    print(f'Research result: {args.output}')
+        logging.exception('Research stopped: %s', exc)
+        parser.exit(1, f'Research stopped: {exc}\nLog: {log_path}\n')
+    else:
+        logging.info('Research result: %s', args.output)
+    finally:
+        listener.stop()
+        log_queue.close()
 
 
 if __name__ == '__main__':
