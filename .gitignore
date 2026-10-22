@@ -49,6 +49,7 @@ coverage.xml
 *.log
 local_settings.py
 db.sqlite3
+backend/data/history/
 
 # Flask stuff:
 instance/
@@ -127,3 +128,5 @@ dist/
 .env.development.local
 .env.test.local
 .env.production.local 
+
+*.json

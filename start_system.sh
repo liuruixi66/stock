@@ -11,9 +11,12 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# 项目路径
-BACKEND_DIR="/home/liu/桌面/stock-main/backend"
-FRONTEND_DIR="/home/liu/桌面/stock-main/frontend"
+# 项目路径：根据脚本位置自动定位，适用于 macOS/Linux
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_DIR="$PROJECT_DIR/backend"
+FRONTEND_DIR="$PROJECT_DIR/frontend"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+BACKEND_URL="http://127.0.0.1:8002/admin/login/"
 
 # 日志函数
 log_info() {
@@ -28,66 +31,37 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# 检查依赖
-check_dependencies() {
-    log_info "检查依赖..."
-    
-    # 检查Python
-    if ! command -v python3 &> /dev/null; then
-        log_error "Python3 未安装"
-        exit 1
-    fi
-    
-    # 检查Node.js
-    if ! command -v node &> /dev/null; then
-        log_error "Node.js 未安装"
-        exit 1
-    fi
-    
-    # 检查npm
-    if ! command -v npm &> /dev/null; then
-        log_error "npm 未安装"
-        exit 1
-    fi
-    
-    log_info "依赖检查完成"
-}
-
 # 启动后端
 start_backend() {
     log_info "启动后端服务..."
     
     cd "$BACKEND_DIR"
     
-    # 检查虚拟环境
-    if [ ! -d "venv" ]; then
-        log_info "创建Python虚拟环境..."
-        python3 -m venv venv
-    fi
-    
-    # 激活虚拟环境
-    source venv/bin/activate
-    
-    # 安装依赖
-    log_info "安装Python依赖..."
-    pip install -r requirements.txt 2>/dev/null || {
-        log_warn "requirements.txt 不存在，安装基础依赖..."
-        pip install django django-cors-headers pymysql pandas numpy
-    }
-    
     # 数据库迁移
     log_info "执行数据库迁移..."
-    cd myproject
-    python manage.py makemigrations
-    python manage.py migrate
+    cd "$BACKEND_DIR"
+    "$PYTHON_BIN" manage.py migrate
     
     # 启动Django服务器
     log_info "启动Django服务器 (端口 8002)..."
-    python manage.py runserver 0.0.0.0:8002 &
+    "$PYTHON_BIN" manage.py runserver 0.0.0.0:8002 &
     BACKEND_PID=$!
     
     log_info "后端服务已启动 (PID: $BACKEND_PID)"
     echo $BACKEND_PID > "$BACKEND_DIR/backend.pid"
+}
+
+wait_for_backend() {
+    log_info "等待后端服务就绪..."
+    for _ in {1..30}; do
+        if curl -fsS "$BACKEND_URL" >/dev/null 2>&1; then
+            log_info "后端服务已就绪"
+            return 0
+        fi
+        sleep 1
+    done
+    log_error "后端服务未能在30秒内就绪"
+    return 1
 }
 
 # 启动前端
@@ -104,7 +78,7 @@ start_frontend() {
     
     # 启动Vite开发服务器
     log_info "启动前端开发服务器 (端口 3000)..."
-    npm run dev &
+    npm run dev -- --host 0.0.0.0 &
     FRONTEND_PID=$!
     
     log_info "前端服务已启动 (PID: $FRONTEND_PID)"
@@ -181,21 +155,17 @@ show_status() {
 main() {
     case "${1:-all}" in
         "backend")
-            check_dependencies
             start_backend
             show_status
             ;;
         "frontend")
-            check_dependencies
             start_frontend
             show_status
             ;;
         "all")
-            check_dependencies
             start_backend
-            sleep 3  # 等待后端启动
+            wait_for_backend
             start_frontend
-            sleep 2  # 等待前端启动
             show_status
             ;;
         "stop")

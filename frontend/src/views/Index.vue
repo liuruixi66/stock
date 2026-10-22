@@ -5,11 +5,15 @@
     <div class="card entry-card">
       <div class="entry-title">功能入口</div>
       <div class="entry-grid">
-        <router-link to="/menu-layout" class="entry-item filter">
-          <i class="fa fa-filter"></i><span>选股中心</span>
+        <router-link to="/research-terminal" class="entry-item filter">
+          <i class="fa fa-flask"></i><span>量化研究</span>
         </router-link>
-        <div class="entry-item strategy"><i class="fa fa-chess-knight"></i><span>策略管理</span></div>
-        <div class="entry-item trade"><i class="fa fa-exchange-alt"></i><span>交易管理</span></div>
+        <router-link to="/backtest-details" class="entry-item strategy">
+          <i class="fa fa-chess-knight"></i><span>回测详情</span>
+        </router-link>
+        <router-link to="/research-terminal" class="entry-item trade">
+          <i class="fa fa-exchange-alt"></i><span>模拟交易</span>
+        </router-link>
         <router-link to="/earnings-overview" class="entry-item earnings">
           <i class="fa fa-chart-line"></i><span>收益概述</span>
         </router-link>
