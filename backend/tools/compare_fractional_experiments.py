@@ -17,10 +17,14 @@ def compare(paths: list[Path]) -> dict:
         params = data['实验参数']
         if experiments:
             reference = experiments[0]['实验参数']
+            if data.get('价格口径约定') != experiments[0]['价格口径约定']:
+                raise ValueError(f'不可直接比较：{path} 的价格口径约定不同（含旧版未声明口径）')
             for name in ('训练开始日期', '验证开始日期', '测试开始日期', '测试结束日期',
                          '买入费率', '卖出费率', '初始资金', '信号阈值', '股票池数量'):
                 if params[name] != reference[name]:
                     raise ValueError(f'不可直接比较：{path} 的{name}不同')
+            if params.get('walk_forward_validation_days') != reference.get('walk_forward_validation_days'):
+                raise ValueError(f'不可直接比较：{path} 的滚动验证窗口不同')
         models = data['模型结果']
         signatures = {
             json.dumps([trial['试验配置'] for trial in model['候选试验']],
@@ -53,6 +57,7 @@ def compare(paths: list[Path]) -> dict:
             metrics[method]['相对基准累计收益差'] = backtest['累计收益率'] - baseline
         experiments.append({
             '结果文件': str(path.resolve()), '股票池随机种子': params['随机种子'],
+            '价格口径约定': data.get('价格口径约定'),
             '实验参数': params, '模型随机种子': training_seed,
             '训练配置签名': signature, '入选股票': provenance['入选股票'],
             '模型数量': len(models), '训练设备': sorted({m['训练设备'] for m in models.values()}),

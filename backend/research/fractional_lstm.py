@@ -14,6 +14,7 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
+from market_data.price_basis import ADJUSTED_BASIS, research_price_contract
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,8 @@ def train_stock(
 ) -> tuple[dict, dict[tuple[date, str], float]]:
     """逐预测日执行滚动选型、历史重训和下一交易日预测。"""
     config.validate()
+    if frame.attrs.get('price_basis', ADJUSTED_BASIS) != ADJUSTED_BASIS:
+        raise DifferencingError('LSTM requires adjusted research prices, not execution OHLC')
     if (isinstance(walk_forward_validation_days, bool)
             or not isinstance(walk_forward_validation_days, int)
             or walk_forward_validation_days < config.minimum_validation_samples):
@@ -238,8 +241,10 @@ def train_stock(
                 model = nn.DataParallel(model, device_ids=[0, 1])
             optimizer = torch.optim.Adam(model.parameters(), lr=trial.learning_rate)
             validation_loss = float('inf')
+            epoch_history = []
             for epoch in range(trial.epochs):
                 model.train()
+                training_loss_sum = torch.zeros((), device=device)
                 for batch in train_indices.split(trial.batch_size):
                     inputs = x[batch]
                     targets = y[batch]
@@ -247,6 +252,7 @@ def train_stock(
                     loss = loss_function(model(inputs), targets)
                     if not torch.isfinite(loss):
                         raise DifferencingError(f'Non-finite training loss for {symbol}')
+                    training_loss_sum += loss.detach() * len(batch)
                     loss.backward()
                     optimizer.step()
                 model.eval()
@@ -258,6 +264,13 @@ def train_stock(
                     ).item())
                 if not np.isfinite(validation_loss):
                     raise DifferencingError(f'Non-finite validation loss for {symbol}')
+                epoch_history.append({
+                    'epoch': epoch + 1,
+                    'training_mse_scaled': float(
+                        (training_loss_sum / len(train_indices)).item(),
+                    ),
+                    'validation_mse_scaled': validation_loss,
+                })
                 if validation_loss < best_validation_loss:
                     best_validation_loss = validation_loss
                     selected_trial = {
@@ -271,6 +284,7 @@ def train_stock(
             trial_results.append({
                 'trial': asdict(trial),
                 'last_validation_mse_scaled': validation_loss,
+                'epoch_history': epoch_history,
             })
         if best_state is None or selected_trial is None:
             raise DifferencingError('No trained model selected')
@@ -445,6 +459,7 @@ def train_stock(
     if last_model is None or last_metadata is None or last_scaler is None:
         raise DifferencingError('No walk-forward model was trained')
     metadata = {
+        'price_contract': research_price_contract(),
         'instrument': symbol, 'method': method, 'order_details': order_details,
         'sample_counts': {
             'train': last_fit_count - walk_forward_validation_days,

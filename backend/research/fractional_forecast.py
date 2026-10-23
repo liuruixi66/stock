@@ -13,6 +13,7 @@ from typing import Mapping, Sequence
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
+from market_data.price_basis import ADJUSTED_BASIS
 
 
 class DifferencingError(ValueError):
@@ -356,6 +357,8 @@ def simulate_long_only(
     30 个固定配置槽位，未启用槽位保留为现金。持仓行情缺失或不可交易时停止实验，
     不伪造成交价。该模型没有模拟整数手、T+1、涨跌停和实际券商撮合。
     """
+    if prices.attrs.get('price_basis', ADJUSTED_BASIS) != ADJUSTED_BASIS:
+        raise DifferencingError('Continuous research simulation requires adjusted prices')
     prices = validate_prices(prices)
     if (not start <= end or not isfinite(initial_capital) or initial_capital <= 0
             or not isfinite(exposure) or not 0 < exposure <= 1
@@ -462,6 +465,8 @@ def simulate_long_only(
     volatility = float(np.std(returns) * np.sqrt(252))
     return {
         'simulation': 'continuous_adjusted_price_next_open_research_only',
+        'price_basis': ADJUSTED_BASIS,
+        'live_trading_eligible': False,
         'universe_mode': (
             'database_random_survivorship_biased' if database_universe else
             'current_sse50_random30_survivorship_biased'

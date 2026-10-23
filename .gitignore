@@ -130,3 +130,6 @@ dist/
 .env.production.local 
 
 *.json
+
+# Generated offline research charts
+backend/research_charts/

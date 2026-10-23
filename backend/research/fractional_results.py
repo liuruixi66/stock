@@ -5,6 +5,12 @@ from typing import overload
 
 
 FIELD_NAMES = {
+    'price_contract': '价格口径约定',
+    'vendor_ohlc_sha256': '供应商OHLC行情SHA256',
+    'corporate_actions_sha256': '公司行动SHA256',
+    'execution_price_basis': '成交价格口径',
+    'nominal_prices_verified': '原价已核验',
+    'live_trading_eligible': '可用于实盘',
     'paper': '论文链接', 'status': '状态', 'universe': '股票池说明',
     'data_provenance': '数据溯源', 'inputs': '输入', 'parameters': '实验参数',
     'models': '模型结果', 'forecasts': '逐日预测', 'backtests': '回测结果',
@@ -44,6 +50,8 @@ FIELD_NAMES = {
     'validation_mse_scaled': '标准化验证均方误差',
     'test_return_mae': '测试收益率平均绝对误差', 'trial': '试验配置',
     'last_validation_mse_scaled': '最后一轮标准化验证均方误差',
+    'epoch_history': '逐轮训练记录', 'training_mse_scaled': '标准化训练均方误差',
+    'daily_selections': '逐日选型记录', 'target_date': '目标日期',
     'training_device': '训练设备', 'visible_gpu_count': '可见GPU数量',
     'gpu_names': 'GPU名称', 'data_parallel_gpus': '双卡并行设备编号',
     'gpu_oom_fallback': '是否触发显存不足双卡重试', 'model': '模型权重',

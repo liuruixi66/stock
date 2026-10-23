@@ -4,7 +4,8 @@ import pandas as pd
 from django.test import SimpleTestCase
 
 from research.fractional_execution import execution_fee, simulate_cash_shares
-from research.fractional_forecast import DatabaseRandomUniverse, DifferencingError
+from research.fractional_forecast import DatabaseRandomUniverse, DifferencingError, simulate_long_only
+from market_data.price_basis import ADJUSTED_BASIS, VENDOR_OHLC_BASIS
 
 
 class FractionalExecutionTests(SimpleTestCase):
@@ -46,6 +47,24 @@ class FractionalExecutionTests(SimpleTestCase):
             execution_fee(0, 0.0003, 5, 0.00001),
             {'commission': 0, 'transfer_fee': 0, 'stamp_duty': 0, 'total': 0},
         )
+
+    def test_adjusted_prices_cannot_be_used_for_share_execution(self):
+        self.prices.attrs['price_basis'] = ADJUSTED_BASIS
+        with self.assertRaisesRegex(DifferencingError, 'Adjusted research prices'):
+            self.run_simulation()
+
+    def test_unverified_vendor_prices_never_claim_live_eligibility(self):
+        result = self.run_simulation()
+        self.assertIs(result['live_trading_eligible'], False)
+        self.assertIs(result['nominal_prices_verified'], False)
+
+    def test_vendor_ohlc_cannot_be_used_as_adjusted_research_prices(self):
+        self.prices.attrs['price_basis'] = VENDOR_OHLC_BASIS
+        with self.assertRaisesRegex(DifferencingError, 'requires adjusted prices'):
+            simulate_long_only(
+                self.prices, self.forecasts, self.universe,
+                self.start, self.start + timedelta(days=3),
+            )
 
     def test_affordability_includes_minimum_fee_and_whole_lot(self):
         self.assertEqual(self.run_simulation(initial_capital=1000)['order_count'], 0)

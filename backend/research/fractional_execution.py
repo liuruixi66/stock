@@ -11,6 +11,7 @@ import pandas as pd
 from research.fractional_forecast import (
     DatabaseRandomUniverse, DifferencingError, long_only_signal, validate_prices,
 )
+from market_data.price_basis import ADJUSTED_BASIS, VENDOR_OHLC_BASIS
 
 
 def money(value: float) -> float:
@@ -47,6 +48,8 @@ def simulate_cash_shares(
     Inputs must be nominal-price candidates with no splits. Dividends become
     non-spendable receivables on the event date because payment dates are absent.
     """
+    if prices.attrs.get('price_basis') == ADJUSTED_BASIS:
+        raise DifferencingError('Adjusted research prices cannot be used for share execution')
     prices = validate_prices(prices)
     if (start > end or not isfinite(initial_capital) or initial_capital <= 0
             or not isfinite(exposure) or not 0 < exposure <= 1
@@ -189,6 +192,9 @@ def simulate_cash_shares(
     returns = equity[1:] / equity[:-1] - 1
     volatility = float(np.std(returns) * np.sqrt(252))
     return {
+        'execution_price_basis': VENDOR_OHLC_BASIS,
+        'nominal_prices_verified': False,
+        'live_trading_eligible': False,
         'simulation': '有限原价股数规则敏感性测试，非实盘复现',
         'total_return': float(equity[-1] / initial_capital - 1),
         'annualized_return': float((equity[-1] / initial_capital) ** (252 / len(days)) - 1),

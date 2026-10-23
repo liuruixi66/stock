@@ -11,9 +11,22 @@ from django.test import SimpleTestCase
 
 from research.fractional_forecast import DifferencingError, validate_prices
 from tools.replay_fractional_execution import replay
+from tools.audit_fractional_prices import audit
+from market_data.price_basis import research_price_contract
+from research.database_fractional import load_fractional_database
+from research.fractional_forecast import ForecastConfig
 
 
 class FractionalReplayTests(SimpleTestCase):
+    def add_versioned_policy(self, source, database):
+        data = json.loads(source.read_text(encoding='utf-8'))
+        current = audit(source, database)['当前指纹']
+        data['price_contract'] = research_price_contract()
+        data['data_provenance']['price_contract'] = research_price_contract()
+        data['data_provenance']['vendor_ohlc_sha256'] = current['供应商OHLC行情SHA256']
+        data['data_provenance']['corporate_actions_sha256'] = current['公司行动SHA256']
+        source.write_text(json.dumps(data), encoding='utf-8')
+
     def create_inputs(self, root):
         database = root / 'stocks.db'
         start = date(2025, 1, 1)
@@ -84,3 +97,76 @@ class FractionalReplayTests(SimpleTestCase):
                 connection.execute('UPDATE cn_daily SET adj_close=adj_close*1.01')
             with self.assertRaisesRegex(DifferencingError, 'price digest'):
                 replay(source, database)
+
+    def test_versioned_replay_checks_both_nominal_and_action_fingerprints(self):
+        for field in ('dividends', 'ohlc'):
+            with self.subTest(field=field), TemporaryDirectory() as directory:
+                source, database = self.create_inputs(Path(directory))
+                self.add_versioned_policy(source, database)
+                result = replay(source, database)
+                self.assertFalse(result['可用于实盘'])
+                with closing(sqlite3.connect(database)) as connection, connection:
+                    if field == 'dividends':
+                        connection.execute('UPDATE cn_daily SET dividends=1')
+                    else:
+                        # Keeping adjusted_close unchanged preserves adjusted OHLC.
+                        connection.execute(
+                            'UPDATE cn_daily SET open=open*2, high=high*2, low=low*2, close=close*2',
+                        )
+                with self.assertRaisesRegex(DifferencingError, 'digest'):
+                    replay(source, database)
+
+    def test_unknown_price_contract_cannot_be_replayed(self):
+        with TemporaryDirectory() as directory:
+            source, database = self.create_inputs(Path(directory))
+            data = json.loads(source.read_text(encoding='utf-8'))
+            data['price_contract'] = {'version': 'unknown'}
+            source.write_text(json.dumps(data), encoding='utf-8')
+            with self.assertRaisesRegex(DifferencingError, 'price contract'):
+                replay(source, database)
+            self.assertFalse(audit(source, database)['声明口径一致'])
+
+    def test_loader_audit_and_replay_agree_on_all_three_fingerprints(self):
+        with TemporaryDirectory() as directory:
+            source, database = self.create_inputs(Path(directory))
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.executescript('''
+                    ALTER TABLE cn_tickers ADD COLUMN name TEXT;
+                    ALTER TABLE cn_tickers ADD COLUMN exchange TEXT DEFAULT 'SSE';
+                    ALTER TABLE cn_tickers ADD COLUMN is_etf INTEGER DEFAULT 0;
+                ''')
+            _, _, provenance = load_fractional_database(
+                database, ForecastConfig(
+                    train_start=date(2024, 1, 1), validation_start=date(2024, 6, 1),
+                    test_start=date(2025, 1, 1), test_end=date(2025, 1, 4),
+                ), universe_size=2,
+            )
+            data = json.loads(source.read_text(encoding='utf-8'))
+            data['price_contract'] = research_price_contract()
+            data['data_provenance'] = provenance
+            source.write_text(json.dumps(data), encoding='utf-8')
+            report = audit(source, database)
+            self.assertTrue(report['研究行情与历史结果一致'])
+            self.assertTrue(all(v is True for v in report['指纹核验'].values()))
+            self.assertEqual(replay(source, database)['来源口径状态'], '版本化研究口径')
+
+    def test_audit_detects_non_cent_prices_without_certifying_nominal_data(self):
+        with TemporaryDirectory() as directory:
+            source, database = self.create_inputs(Path(directory))
+            before = database.read_bytes()
+            report = audit(source, database)
+            self.assertTrue(report['研究行情与历史结果一致'])
+            self.assertFalse(report['可用于实盘'])
+            self.assertEqual(report['股票明细'][1]['非分币OHLC行数'], 4)
+            self.assertIsNone(report['指纹核验']['公司行动SHA256'])
+            self.assertEqual(database.read_bytes(), before)
+
+    def test_audit_exposes_action_changes_even_if_adjusted_prices_match(self):
+        with TemporaryDirectory() as directory:
+            source, database = self.create_inputs(Path(directory))
+            self.add_versioned_policy(source, database)
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute('UPDATE cn_daily SET splits=2')
+            report = audit(source, database)
+            self.assertFalse(report['研究行情与历史结果一致'])
+            self.assertFalse(report['指纹核验']['公司行动SHA256'])

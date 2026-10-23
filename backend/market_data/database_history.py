@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -9,6 +8,7 @@ from django.conf import settings
 
 from .local_history import _validate_bars, normalize_symbol
 from .providers import HistoricalBar, Market, MarketDataError
+from .price_basis import ADJUSTED_BASIS, adjusted_ohlc
 
 
 class SQLiteHistoryProvider:
@@ -75,23 +75,15 @@ class SQLiteHistoryProvider:
             )
 
         bars = []
-        missing_adjustments = 0
         try:
             for day, open_price, high, low, close, adjusted_close, volume in rows:
-                raw_close = float(close)
-                if adjusted_close is None:
-                    adjusted_close = raw_close
-                    missing_adjustments += 1
-                adjusted_close = float(adjusted_close)
-                if not math.isfinite(raw_close) or raw_close <= 0:
-                    raise ValueError(f'Invalid close price on {day}')
-                factor = adjusted_close / raw_close
+                adjusted_open, adjusted_high, adjusted_low, adjusted_last = adjusted_ohlc(
+                    open_price, high, low, close, adjusted_close,
+                )
                 bars.append(HistoricalBar(
                     date=date.fromisoformat(day),
-                    open=float(open_price) * factor,
-                    high=float(high) * factor,
-                    low=float(low) * factor,
-                    close=raw_close * factor,
+                    open=adjusted_open, high=adjusted_high, low=adjusted_low,
+                    close=adjusted_last,
                     volume=int(volume),
                 ))
             _validate_bars(bars, start, end)
@@ -103,11 +95,14 @@ class SQLiteHistoryProvider:
             'table': table,
             'symbol': database_symbol,
             'adjustment': 'adjusted close factor applied to OHLC',
+            'price_basis': ADJUSTED_BASIS,
+            'nominal_prices_verified': False,
+            'point_in_time_verified': False,
             'requested_start': start.isoformat(),
             'requested_end': end.isoformat(),
             'first_bar': bars[0].date.isoformat(),
             'last_bar': bars[-1].date.isoformat(),
             'bar_count': len(bars),
-            'missing_adjusted_close_count': missing_adjustments,
+            'missing_adjusted_close_count': 0,
         }
         return bars

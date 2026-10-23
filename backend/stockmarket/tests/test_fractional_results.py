@@ -10,6 +10,7 @@ from research.fractional_forecast import DifferencingError
 from research.fractional_results import chinese_result
 from tools.compare_fractional_experiments import compare
 from tools.run_fractional_research import _append_checkpoint, _restore_checkpoint
+from market_data.price_basis import research_price_contract
 
 
 class FractionalResultLanguageTests(SimpleTestCase):
@@ -102,8 +103,50 @@ class FractionalComparisonTests(SimpleTestCase):
                 with self.assertRaises(ValueError):
                     compare(paths)
 
+    def test_legacy_and_versioned_price_policies_cannot_be_compared(self):
+        first = self.result()
+        second = deepcopy(first)
+        second['price_contract'] = research_price_contract()
+        with TemporaryDirectory() as directory:
+            paths = [Path(directory) / 'old.json', Path(directory) / 'new.json']
+            for path, data in zip(paths, (first, second)):
+                path.write_text(json.dumps(data), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, '价格口径约定'):
+                compare(paths)
+
+    def test_changed_walk_forward_window_cannot_be_compared(self):
+        first = self.result()
+        first['parameters']['walk_forward_validation_days'] = 60
+        second = deepcopy(first)
+        second['parameters']['walk_forward_validation_days'] = 120
+        with TemporaryDirectory() as directory:
+            paths = [Path(directory) / 'first.json', Path(directory) / 'second.json']
+            for path, data in zip(paths, (first, second)):
+                path.write_text(json.dumps(data), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, '滚动验证窗口'):
+                compare(paths)
+
 
 class FractionalTrainingCheckpointTests(SimpleTestCase):
+    def test_checkpoint_with_changed_price_contract_is_rejected(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'progress.jsonl'
+            _restore_checkpoint(path, 'signature')
+            header = json.loads(path.read_text(encoding='utf-8'))
+            header['price_contract']['model_input_basis'] = 'raw'
+            path.write_text(json.dumps(header) + '\n', encoding='utf-8')
+            with self.assertRaisesRegex(DifferencingError, 'price policy'):
+                _restore_checkpoint(path, 'signature')
+
+    def test_old_price_policy_checkpoint_is_rejected_without_modification(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'progress.jsonl'
+            content = json.dumps({'type': 'header', 'version': 1, 'signature': 'signature'}) + '\n'
+            path.write_text(content, encoding='utf-8')
+            with self.assertRaisesRegex(DifferencingError, 'price policy'):
+                _restore_checkpoint(path, 'signature')
+            self.assertEqual(path.read_text(encoding='utf-8'), content)
+
     def test_checkpoint_restores_completed_symbol_models_and_forecasts(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'progress.jsonl'

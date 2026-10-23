@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date
-import hashlib
 import json
 import logging
 from pathlib import Path
@@ -14,6 +13,10 @@ import pandas as pd
 
 from research.fractional_forecast import (
     DatabaseRandomUniverse, DifferencingError, ForecastConfig, validate_prices,
+)
+from market_data.price_basis import (
+    ACTION_COLUMNS, ADJUSTED_BASIS, PRICE_COLUMNS, adjusted_ohlc,
+    frame_digest, research_price_contract,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,6 +60,7 @@ def load_fractional_database(
     try:
         connection = sqlite3.connect(uri, uri=True)
         try:
+            connection.execute('BEGIN')
             connection.set_progress_handler(report_query_progress, 100000)
             candidates = connection.execute(
                 '''
@@ -136,7 +140,7 @@ def load_fractional_database(
             rows = connection.execute(
                 f'''
                 SELECT t.code, d.date, d.open, d.high, d.low, d.close,
-                       d.adj_close, d.volume
+                       d.adj_close, d.volume, d.dividends, d.splits
                 FROM cn_daily AS d
                 JOIN cn_tickers AS t ON t.symbol = d.symbol
                 WHERE t.symbol IN ({placeholders}) AND d.date BETWEEN ? AND ?
@@ -151,26 +155,36 @@ def load_fractional_database(
 
     records = []
     logger.info('Adjusting and validating %d price rows', len(rows))
-    for code, day, open_price, high, low, close, adjusted_close, volume in rows:
-        factor = float(adjusted_close) / float(close)
+    vendor_records = []
+    for code, day, open_price, high, low, close, adjusted_close, volume, dividends, splits in rows:
+        try:
+            adjusted_open, adjusted_high, adjusted_low, adjusted_last = adjusted_ohlc(
+                open_price, high, low, close, adjusted_close,
+            )
+        except ValueError as exc:
+            raise DifferencingError(f'Invalid adjustment for {code} on {day}: {exc}') from exc
+        vendor_records.append({
+            'date': date.fromisoformat(day), 'instrument': f'{code}.SH',
+            'open': float(open_price), 'high': float(high), 'low': float(low),
+            'close': float(close), 'volume': float(volume),
+            'dividends': dividends, 'splits': splits,
+        })
         records.append({
             'date': day,
             'instrument': f'{str(code).zfill(6)}.SH',
-            'open': float(open_price) * factor,
-            'high': float(high) * factor,
-            'low': float(low) * factor,
-            'close': float(close) * factor,
+            'open': adjusted_open, 'high': adjusted_high,
+            'low': adjusted_low, 'close': adjusted_last,
             'volume': float(volume),
         })
     prices = validate_prices(pd.DataFrame.from_records(records))
+    prices.attrs['price_basis'] = ADJUSTED_BASIS
+    vendor_frame = pd.DataFrame.from_records(vendor_records)
 
     selected_codes = [f'{code}.SH' for _, code, _ in selected]
     universe = DatabaseRandomUniverse(
         selected_codes, date.today(), seed, len(eligible),
     )
-    price_digest = hashlib.sha256(
-        prices.to_csv(index=False, float_format='%.12g', lineterminator='\n').encode('utf-8'),
-    ).hexdigest()
+    price_digest = frame_digest(prices, PRICE_COLUMNS)
     metadata = {
         'source': 'stocks.db',
         'database_path': str(path),
@@ -178,6 +192,9 @@ def load_fractional_database(
         'ticker_table': 'cn_tickers',
         'exchange': 'SSE',
         'adjustment': 'adj_close / close factor applied to OHLC',
+        'price_contract': research_price_contract(),
+        'vendor_ohlc_sha256': frame_digest(vendor_frame, PRICE_COLUMNS),
+        'corporate_actions_sha256': frame_digest(vendor_frame, ACTION_COLUMNS),
         'universe_mode': 'seeded random sample of complete-history Shanghai non-ETF stocks',
         'universe_selection_date': universe.selection_date.isoformat(),
         'universe_seed': seed,

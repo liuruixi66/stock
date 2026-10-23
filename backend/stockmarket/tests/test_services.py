@@ -3,6 +3,7 @@ import os
 import sqlite3
 import sys
 from datetime import date, datetime, timedelta, timezone
+from contextlib import closing
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
@@ -179,16 +180,26 @@ class SQLiteHistoryTests(SimpleTestCase):
             finally:
                 connection.close()
 
-    def test_resolves_us_symbols_and_reports_missing_adjustment_values(self) -> None:
+    def test_missing_adjustment_is_rejected_instead_of_using_raw_close(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'stocks.db'
             self._database(path)
             provider = SQLiteHistoryProvider('US', path)
 
-            bars = provider.get_history('aapl', date(2025, 1, 1), date(2025, 1, 3))
+            with self.assertRaisesRegex(MarketDataError, 'Missing or invalid adjusted'):
+                provider.get_history('aapl', date(2025, 1, 1), date(2025, 1, 3))
+            self.assertNotIn('AAPL', provider.datasets)
 
-            self.assertEqual(bars[0].close, 11)
-            self.assertEqual(provider.datasets['AAPL']['missing_adjusted_close_count'], 1)
+    def test_us_symbols_resolve_with_valid_adjustment(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'stocks.db'
+            self._database(path)
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute('UPDATE us_daily SET adj_close=5.5')
+            provider = SQLiteHistoryProvider('US', path)
+            bars = provider.get_history('aapl', date(2025, 1, 1), date(2025, 1, 3))
+            self.assertEqual(bars[0].close, 5.5)
+            self.assertFalse(provider.datasets['AAPL']['nominal_prices_verified'])
 
     def test_rejects_unsupported_market_and_missing_database_symbol(self) -> None:
         with TemporaryDirectory() as directory:
@@ -215,7 +226,8 @@ class FractionalDatabaseTests(SimpleTestCase):
                     );
                     CREATE TABLE cn_daily (
                         symbol TEXT, date TEXT, open REAL, high REAL, low REAL,
-                        close REAL, adj_close REAL, volume INTEGER
+                        close REAL, adj_close REAL, volume INTEGER,
+                        dividends REAL, splits REAL
                     );
                 ''')
                 for index in range(31):
@@ -230,10 +242,10 @@ class FractionalDatabaseTests(SimpleTestCase):
                             continue
                         price = 10 + day
                         connection.execute(
-                            'INSERT INTO cn_daily VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                            'INSERT INTO cn_daily VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                             (
                                 symbol, f'2025-01-{day:02}', price, price, price,
-                                price, price * 2, 1000,
+                                price, price * 2, 1000, 0.0, 0.0,
                             ),
                         )
                 connection.commit()
@@ -265,6 +277,9 @@ class FractionalDatabaseTests(SimpleTestCase):
             self.assertTrue(first_prices.equals(second_prices))
             self.assertEqual(metadata['eligible_universe_size'], 30)
             self.assertEqual(metadata['adjustment'], 'adj_close / close factor applied to OHLC')
+            self.assertEqual(metadata['price_contract']['version'], 'fractional-price-policy-v1')
+            self.assertEqual(len(metadata['vendor_ohlc_sha256']), 64)
+            self.assertEqual(len(metadata['corporate_actions_sha256']), 64)
 
     def test_backtest_keeps_database_position_through_zero_volume_session(self) -> None:
         start = date(2025, 1, 1)

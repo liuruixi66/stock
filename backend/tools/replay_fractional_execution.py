@@ -13,8 +13,8 @@ dividends remain non-spendable receivables, and price limits are not simulated.
 import argparse
 from contextlib import closing
 from datetime import date
-import hashlib
 import json
+import logging
 from pathlib import Path
 import sqlite3
 
@@ -27,6 +27,10 @@ from research.fractional_forecast import (
     DatabaseRandomUniverse, DifferencingError, simulate_long_only, validate_prices,
 )
 from research.fractional_results import chinese_result
+from market_data.price_basis import (
+    ACTION_COLUMNS, ADJUSTED_BASIS, PRICE_COLUMNS, VENDOR_OHLC_BASIS,
+    adjusted_ohlc, frame_digest, research_price_contract,
+)
 
 
 def replay(
@@ -38,6 +42,19 @@ def replay(
     if '逐日预测' not in data:
         raise DifferencingError('Result lacks saved forecasts; use a newly completed experiment')
     provenance = data['数据溯源']
+    contract = data.get('价格口径约定')
+    if contract is not None:
+        if (contract != chinese_result(research_price_contract())
+                or provenance.get('价格口径约定') != contract):
+            raise DifferencingError('Unsupported or inconsistent experiment price contract')
+        for key in ('供应商OHLC行情SHA256', '公司行动SHA256'):
+            if key not in provenance:
+                raise DifferencingError(f'Versioned experiment lacks required digest: {key}')
+    else:
+        logging.warning(
+            'Legacy research result: nominal OHLC and corporate actions were not '
+            'fingerprinted during training; replay is unverified sensitivity only.',
+        )
     parameters = data['实验参数']
     start = date.fromisoformat(parameters['测试开始日期'])
     end = date.fromisoformat(parameters['测试结束日期'])
@@ -45,11 +62,12 @@ def replay(
     codes = [symbol.removesuffix('.SH') for symbol in selected]
     marks = ','.join('?' for _ in codes)
     with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as connection:
+        connection.execute('BEGIN')
         rows = connection.execute(
             f'''SELECT t.code, d.date, d.open, d.high, d.low, d.close,
                        d.adj_close, d.volume, d.dividends, d.splits
-                FROM cn_daily d JOIN cn_tickers t ON t.symbol=d.symbol
-                WHERE t.code IN ({marks}) AND d.date >= ?
+                FROM cn_tickers t CROSS JOIN cn_daily d
+                WHERE t.symbol=d.symbol AND t.code IN ({marks}) AND d.date >= ?
                 ORDER BY t.code,d.date''',
             [*codes, parameters['训练开始日期']],
         ).fetchall()
@@ -61,16 +79,26 @@ def replay(
     raw = validate_prices(raw)
     historical = raw[raw['date'] <= end].copy()
     adjusted = historical[['date', 'instrument', 'open', 'high', 'low', 'close', 'volume']].copy()
-    factor = historical['adj_close'].to_numpy(dtype=float) / historical['close'].to_numpy(dtype=float)
-    if not np.isfinite(factor).all() or (factor <= 0).any():
-        raise DifferencingError('Invalid adjusted-close factors in replay database')
-    for column in ('open', 'high', 'low', 'close'):
-        adjusted[column] = adjusted[column] * factor
-    digest = hashlib.sha256(
-        adjusted.to_csv(index=False, float_format='%.12g', lineterminator='\n').encode('utf-8'),
-    ).hexdigest()
+    try:
+        adjusted_values = [
+            adjusted_ohlc(*point)
+            for point in historical[['open', 'high', 'low', 'close', 'adj_close']].itertuples(index=False, name=None)
+        ]
+    except ValueError as exc:
+        raise DifferencingError(f'Invalid adjusted-close factors in replay database: {exc}') from exc
+    adjusted[['open', 'high', 'low', 'close']] = adjusted_values
+    adjusted.attrs['price_basis'] = ADJUSTED_BASIS
+    raw.attrs['price_basis'] = VENDOR_OHLC_BASIS
+    digest = frame_digest(adjusted, PRICE_COLUMNS)
     if digest != provenance['所选行情SHA256']:
         raise DifferencingError('Replay database differs from the saved training price digest')
+    vendor_digest = frame_digest(historical, PRICE_COLUMNS)
+    action_digest = frame_digest(historical, ACTION_COLUMNS)
+    for key, current in (
+        ('供应商OHLC行情SHA256', vendor_digest), ('公司行动SHA256', action_digest),
+    ):
+        if key in provenance and current != provenance[key]:
+            raise DifferencingError(f'Replay database differs from the saved {key} digest')
     kept, excluded = [], []
     for symbol in selected:
         stock = raw[(raw['instrument'] == symbol) & (raw['date'] >= start)]
@@ -131,6 +159,11 @@ def replay(
             **options,
         )
     return chinese_result({
+        '价格口径约定': research_price_contract(),
+        '来源口径状态': '版本化研究口径' if contract is not None else '旧版未声明口径，仅供敏感性分析',
+        'vendor_ohlc_sha256': vendor_digest,
+        'corporate_actions_sha256': action_digest,
+        'live_trading_eligible': False,
         '来源结果文件': str(source.resolve()), '股票池随机种子': parameters['随机种子'],
         '股票池筛选': {
             '原股票数量': len(selected), '通过检查股票数量': len(kept),

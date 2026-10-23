@@ -24,9 +24,10 @@ from research.fractional_lstm import (
     LSTMTrial, evaluate_return_predictions, train_stock,
 )
 from research.fractional_results import chinese_result
+from market_data.price_basis import research_price_contract
 
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 METHODS = ('de_prado', 'log_return')
 
 
@@ -41,6 +42,7 @@ def _checkpoint_signature(args) -> str:
     database = args.database.expanduser().resolve()
     stat = database.stat()
     parameters = {
+        'price_contract': research_price_contract(),
         'database': str(database),
         'database_size': stat.st_size,
         'database_mtime_ns': stat.st_mtime_ns,
@@ -77,6 +79,7 @@ def _restore_checkpoint(path: Path, signature: str):
             checkpoint.write(json.dumps({
                 'type': 'header', 'version': CHECKPOINT_VERSION,
                 'signature': signature,
+                'price_contract': research_price_contract(),
             }, separators=(',', ':')) + '\n')
             checkpoint.flush()
             os.fsync(checkpoint.fileno())
@@ -90,9 +93,11 @@ def _restore_checkpoint(path: Path, signature: str):
             raise DifferencingError(f'Invalid checkpoint header in {path}') from exc
         if (header.get('type') != 'header'
                 or header.get('version') != CHECKPOINT_VERSION
-                or header.get('signature') != signature):
+                or header.get('signature') != signature
+                or header.get('price_contract') != research_price_contract()):
             raise DifferencingError(
-                f'Checkpoint does not match this experiment: {path}',
+                f'Checkpoint version or experiment/price policy differs: {path}; '
+                'preserve the old checkpoint and use a new output filename',
             )
         for line_number, line in enumerate(checkpoint, start=2):
             try:
@@ -253,6 +258,10 @@ def run(args) -> dict:
         test_start=args.test_start, test_end=args.test_end,
     )
     config.validate()
+    logging.warning(
+        'Research-only vendor adjusted snapshot; not certified qfq/hfq or '
+        'point-in-time. Vendor OHLC is not verified nominal execution data.',
+    )
     if isinstance(args.parallel_gpus, bool) or args.parallel_gpus < 1:
         raise DifferencingError('--parallel-gpus must be a positive integer')
     if isinstance(args.workers_per_gpu, bool) or args.workers_per_gpu < 1:
@@ -375,6 +384,7 @@ def run(args) -> dict:
     )
     evaluations = _model_evaluations(prices, predictions, runs)
     return {
+        'price_contract': research_price_contract(),
         'paper': 'https://arxiv.org/abs/2505.19243',
         'status': 'method_migration_not_exact_replication',
         'universe': (
