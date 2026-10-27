@@ -8,6 +8,7 @@ from unittest.mock import patch
 from tools.verify_fractional_sources import (
     compare, parse_actions, parse_prices, verify, windows,
 )
+from tools.collect_fractional_announcement import parse_distribution
 
 
 class ExternalPriceVerificationTests(TestCase):
@@ -152,3 +153,50 @@ class ExternalPriceVerificationTests(TestCase):
             self.assertTrue((output / 'evidence' / '600001-stored-snapshot.json').is_file())
             with self.assertRaisesRegex(ValueError, 'overwrite'):
                 verify(source, database, output)
+            data = json.loads(source.read_text(encoding='utf-8'))
+            data['parameters']['train_start'] = '2020-01-01'
+            source.write_text(json.dumps(data), encoding='utf-8')
+            response = requests.Response()
+            response.status_code = 501
+            unavailable = requests.HTTPError('server unavailable', response=response)
+            with patch('tools.verify_fractional_sources.fetch', side_effect=unavailable) as fetcher, \
+                    patch('tools.verify_fractional_sources.time.sleep'):
+                result = verify(source, database, root / 'unavailable')
+            self.assertEqual(fetcher.call_count, 2)  # One actual request per source.
+            self.assertFalse(result['research_crosscheck_passed'])
+            self.assertTrue(any('remaining requests are not sent' in item['error']
+                                for item in result['stocks'][0]['errors']))
+
+
+class AnnouncementDistributionTests(TestCase):
+    def announcement(self):
+        return (
+            '证券代码：600055 A 股每股现金红利0.15元 每股转增股份0.40股 '
+            '股份类别 股权登记日 最后交易日 除权（息）日 新增无限售条件流通股份上市日 '
+            '现金红利发放日 Ａ股 2017/6/1 － 2017/6/2 2017/6/5 2017/6/2 '
+            '差异化分红送转：否'
+        )
+
+    def test_reads_explicit_dates_and_per_share_amounts(self):
+        event = parse_distribution(self.announcement(), '600055')
+        self.assertEqual(event['cash_per_share_pretax'], 0.15)
+        self.assertEqual(event['transfer_shares_per_share'], 0.4)
+        self.assertEqual(event['record_date'], '2017-06-01')
+        self.assertEqual(event['ex_date'], '2017-06-02')
+        self.assertEqual(event['new_share_listing_date'], '2017-06-05')
+        self.assertEqual(event['cash_payment_date'], '2017-06-02')
+        self.assertFalse(event['live_trading_eligible'])
+
+    def test_ambiguous_or_missing_tables_require_manual_review(self):
+        for text in (
+            self.announcement().replace('差异化分红送转：否', '差异化分红送转：是'),
+            self.announcement().replace('2017/6/5', ''),
+            self.announcement().replace('2017/6/1', '2017/6/6'),
+            self.announcement().replace('0.15元', '未确定'),
+        ):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                parse_distribution(text, '600055')
+
+    def test_symbol_mismatch_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'security code'):
+            parse_distribution(self.announcement(), '600058')

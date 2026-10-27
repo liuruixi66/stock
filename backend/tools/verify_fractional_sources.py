@@ -355,6 +355,21 @@ def verify(source, database, output, interval=0.5):
     with requests.Session() as session:
         session.trust_env = False
         session.headers.update({'User-Agent': 'Mozilla/5.0'})
+        blocked_sources = {}
+
+        def request_evidence(url, params, filename):
+            if url in blocked_sources:
+                raise requests.RequestException(
+                    f'Source disabled for this run after HTTP {blocked_sources[url]}; '
+                    'remaining requests are not sent',
+                )
+            try:
+                return fetch(session, url, params, evidence, filename)
+            except requests.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code in (429, 501, 503):
+                    blocked_sources[url] = exc.response.status_code
+                raise
+
         for index, symbol in enumerate(symbols, start=1):
             prices, actions, receipts = {}, [], []
             errors = []
@@ -366,10 +381,10 @@ def verify(source, database, output, interval=0.5):
             (evidence / stored_filename).write_bytes(stored_snapshot)
             for begin, stop in windows(start, end):
                 try:
-                    payload, receipt = fetch(
-                        session, TENCENT_URL,
+                    payload, receipt = request_evidence(
+                        TENCENT_URL,
                         {'param': f'sh{symbol[:6]},day,{begin},{stop},640,'},
-                        evidence, f'{symbol[:6]}-ohlc-{begin}-{stop}.json',
+                        f'{symbol[:6]}-ohlc-{begin}-{stop}.json',
                     )
                     receipts.append(receipt)
                     segment = parse_prices(payload, f'sh{symbol[:6]}', begin, stop)
@@ -381,13 +396,13 @@ def verify(source, database, output, interval=0.5):
             seen_actions = set()
             while page <= total_pages:
                 try:
-                    payload, receipt = fetch(
-                        session, ACTIONS_URL,
+                    payload, receipt = request_evidence(
+                        ACTIONS_URL,
                         {'reportName': 'RPT_SHAREBONUS_DET', 'columns': 'ALL',
                          'filter': f'(SECURITY_CODE="{symbol[:6]}")(ASSIGN_PROGRESS="实施分配")',
                          'pageNumber': str(page), 'pageSize': '500',
                          'sortColumns': 'EX_DIVIDEND_DATE', 'sortTypes': '-1'},
-                        evidence, f'{symbol[:6]}-actions-{page}.json',
+                        f'{symbol[:6]}-actions-{page}.json',
                     )
                     receipts.append(receipt)
                     segment, pages = parse_actions(payload, symbol[:6])
