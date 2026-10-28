@@ -25,16 +25,26 @@ def compare(paths: list[Path]) -> dict:
                     raise ValueError(f'不可直接比较：{path} 的{name}不同')
             if params.get('walk_forward_validation_days') != reference.get('walk_forward_validation_days'):
                 raise ValueError(f'不可直接比较：{path} 的滚动验证窗口不同')
+            for name, default in (
+                ('训练模式', 'legacy'), ('早停等待轮数', 0),
+                ('显著改善阈值', 1e-6), ('选型指标', 'scaled_mse'),
+            ):
+                if params.get(name, default) != reference.get(name, default):
+                    raise ValueError(f'不可直接比较：{path} 的{name}不同')
         models = data['模型结果']
-        signatures = {
-            json.dumps([trial['试验配置'] for trial in model['候选试验']],
-                       ensure_ascii=False, sort_keys=True)
-            for model in models.values()
-        }
+        signatures = {}
+        for key, model in models.items():
+            method = key.rsplit(':', 1)[-1]
+            config = json.dumps([trial['试验配置'] for trial in model['候选试验']],
+                                ensure_ascii=False, sort_keys=True)
+            signatures.setdefault(method, set()).add(config)
         training_seeds = {model['随机种子'] for model in models.values()}
-        if len(signatures) != 1 or len(training_seeds) != 1:
+        if any(len(configs) != 1 for configs in signatures.values()) or len(training_seeds) != 1:
             raise ValueError(f'同一实验的模型配置或随机种子不一致：{path}')
-        signature = next(iter(signatures))
+        signature = json.dumps(
+            {method: next(iter(configs)) for method, configs in signatures.items()},
+            ensure_ascii=False, sort_keys=True,
+        )
         training_seed = next(iter(training_seeds))
         if experiments and (
             signature != experiments[0]['训练配置签名']

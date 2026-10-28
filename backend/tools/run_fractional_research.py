@@ -1,6 +1,7 @@
 """Run the database-backed Shanghai-stock LSTM research experiment."""
 
 import argparse
+from dataclasses import asdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import ExitStack
 from datetime import date
@@ -27,7 +28,7 @@ from research.fractional_results import chinese_result
 from market_data.price_basis import research_price_contract
 
 
-CHECKPOINT_VERSION = 2
+CHECKPOINT_VERSION = 3
 METHODS = ('de_prado', 'log_return')
 
 
@@ -61,6 +62,12 @@ def _checkpoint_signature(args) -> str:
         'model_seed': 42,
         'methods': METHODS,
         'hidden_sizes': (16, 32),
+        'training_mode': args.training_mode,
+        'patience': args.early_stopping_patience,
+        'min_delta': args.min_delta,
+        'search_signature': args.search_signature,
+        'trial_settings': args.trial_settings,
+        'model_directory': str(args.model_directory.resolve()),
     }
     serialized = json.dumps(parameters, sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
@@ -164,14 +171,18 @@ def _append_checkpoint(path: Path, symbol: str, method_results: dict) -> None:
 
 def _train_symbol(
     stock, config, methods, trial_settings, walk_forward_validation_days, device_index,
+    patience=0, min_delta=1e-6, selection_metric='scaled_mse',
+    checkpoint_directory=None,
 ):
     symbol = str(stock['instrument'].iloc[0])
     method_results = {}
     for method in methods:
         metadata, forecasts = train_stock(
-            stock, config, method, trial_settings, seed=42,
+            stock, config, method, trial_settings[method], seed=42,
             walk_forward_validation_days=walk_forward_validation_days,
             device_index=device_index,
+            patience=patience, min_delta=min_delta, selection_metric=selection_metric,
+            checkpoint_directory=checkpoint_directory,
         )
         method_results[method] = (metadata, forecasts)
     return symbol, method_results
@@ -253,6 +264,19 @@ def _model_evaluations(prices, predictions, backtests) -> dict:
 
 
 def run(args) -> dict:
+    tuned = args.training_mode == 'tuned'
+    args.train_start = args.train_start or (
+        date(2006, 10, 16) if tuned else date(2023, 1, 1)
+    )
+    args.validation_start = args.validation_start or (
+        date(2014, 10, 14) if tuned else date(2024, 1, 1)
+    )
+    args.epochs = args.epochs if args.epochs is not None else (120 if tuned else 30)
+    if not tuned:
+        args.early_stopping_patience = 0
+    args.model_directory = args.model_directory or args.output.with_name(
+        args.output.name + '.models',
+    )
     config = ForecastConfig(
         train_start=args.train_start, validation_start=args.validation_start,
         test_start=args.test_start, test_end=args.test_end,
@@ -278,12 +302,61 @@ def run(args) -> dict:
             )
     if args.output.exists():
         raise DifferencingError('Refusing to overwrite an existing experiment')
+    checkpoint = _checkpoint_path(args.output)
+    if args.model_directory.exists() and not checkpoint.exists():
+        raise DifferencingError(
+            'Model directory already exists without matching stock progress; '
+            'use a new output/model directory instead of overwriting saved weights',
+        )
+    search_report = None
+    args.search_signature = None
+    selection_metric = 'return_mae' if tuned else 'scaled_mse'
+    if tuned:
+        from research.fractional_tuning import SearchSettings, run_search
+
+        if args.train_start > date(2006, 10, 16):
+            raise DifferencingError(
+                'Tuned mode requires training history from 2006-10-16; '
+                'use --training-mode legacy for a shorter dataset',
+            )
+        args.search_directory = args.search_directory or args.output.with_name(
+            args.output.name + '.search',
+        )
+        search_report = run_search(
+            args.database, args.search_directory, SearchSettings(
+                stock_count=args.search_stocks, total_trials=args.search_trials,
+                max_epochs=args.epochs, patience=args.early_stopping_patience,
+                min_delta=args.min_delta, seed=args.seed,
+            ), test_start=args.test_start, resume=args.resume_search,
+        )
+        trial_settings = {
+            method: [LSTMTrial(**search_report['methods'][method]['selected_trial'])]
+            for method in METHODS
+        }
+        args.search_signature = search_report['signature']
+        for method in METHODS:
+            if not search_report['methods'][method]['qualified_vs_zero_baseline']:
+                logging.warning(
+                    '%s search winner does NOT beat zero-return MAE; research only',
+                    method,
+                )
+    else:
+        trial_settings = {
+            method: [LSTMTrial(hidden_size=size, epochs=args.epochs) for size in (16, 32)]
+            for method in METHODS
+        }
+    args.trial_settings = {
+        method: [asdict(trial) for trial in trials]
+        for method, trials in trial_settings.items()
+    }
+    logging.info('Effective training mode=%s trials=%s patience=%d metric=%s',
+                 args.training_mode, args.trial_settings, args.early_stopping_patience,
+                 selection_metric)
     prices, universe, provenance = load_fractional_database(
         args.database, config, seed=args.seed, universe_size=args.universe_size,
     )
     candidates = universe.members_between(config.test_start, config.test_end)
     models = {}
-    checkpoint = _checkpoint_path(args.output)
     models, predictions, completed_symbols = _restore_checkpoint(
         checkpoint, _checkpoint_signature(args),
     )
@@ -291,7 +364,6 @@ def run(args) -> dict:
         raise DifferencingError(
             'Checkpoint contains symbols outside the selected stock universe',
         )
-    trial_settings = [LSTMTrial(hidden_size=size, epochs=args.epochs) for size in (16, 32)]
     logging.info(
         f'Resuming {len(completed_symbols)}/{len(candidates)} stocks; '
         f'{len(predictions)} methods, '
@@ -305,6 +377,8 @@ def run(args) -> dict:
             trained_symbol, method_results = _train_symbol(
                 stock, config, tuple(predictions), trial_settings,
                 args.walk_forward_validation_days, None,
+                args.early_stopping_patience, args.min_delta, selection_metric,
+                args.model_directory,
             )
             for method, (metadata, forecasts) in method_results.items():
                 models[f'{trained_symbol}:{method}'] = metadata
@@ -336,6 +410,8 @@ def run(args) -> dict:
                 future = workers[gpu_index].submit(
                     _train_symbol, stock, config, tuple(predictions), trial_settings,
                     args.walk_forward_validation_days, gpu_index,
+                    args.early_stopping_patience, args.min_delta, selection_metric,
+                    args.model_directory,
                 )
                 future_jobs[future] = (symbol, gpu_index)
 
@@ -393,6 +469,14 @@ def run(args) -> dict:
         ),
         'data_provenance': provenance,
         'inputs': {'database': provenance},
+        'hyperparameter_search': {
+            'report_path': str(args.search_directory.resolve() / 'report.json'),
+            'signature': args.search_signature,
+            'qualification': {
+                method: search_report['methods'][method]['qualified_vs_zero_baseline']
+                for method in METHODS
+            },
+        } if search_report is not None else None,
         'parameters': {
             'train_start': config.train_start.isoformat(),
             'validation_start': config.validation_start.isoformat(),
@@ -408,6 +492,10 @@ def run(args) -> dict:
             'sell_cost': args.sell_cost,
             'signal_threshold': args.signal_threshold,
             'initial_capital': args.capital,
+            'training_mode': args.training_mode, 'trial_settings': args.trial_settings,
+            'early_stopping_patience': args.early_stopping_patience,
+            'min_delta': args.min_delta, 'selection_metric': selection_metric,
+            'model_directory': str(args.model_directory.resolve()),
         },
         'models': models,
         'forecasts': {
@@ -424,8 +512,8 @@ def run(args) -> dict:
             'Database adjusted-close ratios are applied to OHLC prices.',
             'De Prado and first-difference branches only; no ARFIMA/ARTFIMA R estimator replication.',
             'ADF grid 0.05, truncation 0.001, AIC lag selection are disclosed implementation settings.',
-            'Single-layer PyTorch LSTM; independent-stock GPU workers are used only when --parallel-gpus exceeds 1.',
-            'Hidden16/32, daily walk-forward model/epoch selection on the preceding 60 labeled samples; every prediction is fit only on data before its target date.',
+            'PyTorch LSTM; effective layer/width/search settings are recorded in parameters.',
+            'Daily walk-forward epoch selection uses only preceding labeled samples; search configuration is frozen before test forecasts.',
             'Daily equal allocation slots; no reallocation of inactive slots, 95% max exposure.',
             'Research costs cannot replace actual A-share commissions or execution rules.',
             'Only a research simulator; actual stock execution must be validated separately.',
@@ -433,7 +521,7 @@ def run(args) -> dict:
     }
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         '--database', type=Path, default=STOCKS_DATABASE_PATH,
@@ -442,18 +530,26 @@ def main() -> None:
     parser.add_argument('--output', type=Path, required=True,
                         help='Chinese JSON results, including saved forecasts; refuses overwrite')
     parser.add_argument('--seed', type=int, default=42,
-                        help='Stock-sample seed; model initialization stays fixed at 42')
+                        help='Stock-sample/search seed; walk-forward initialization stays 42')
     parser.add_argument('--universe-size', type=int, default=30)
     parser.add_argument(
         '--walk-forward-validation-days', type=int, default=60,
         help='Use this many immediately preceding trading-day samples for daily model selection',
     )
-    parser.add_argument('--train-start', type=date.fromisoformat, default=date(2023, 1, 1))
-    parser.add_argument('--validation-start', type=date.fromisoformat, default=date(2024, 1, 1))
+    parser.add_argument('--train-start', type=date.fromisoformat)
+    parser.add_argument('--validation-start', type=date.fromisoformat)
     parser.add_argument('--test-start', type=date.fromisoformat, default=date(2025, 1, 1))
     parser.add_argument('--test-end', type=date.fromisoformat, default=date(2026, 10, 14))
     parser.add_argument('--capital', type=float, default=100000)
-    parser.add_argument('--epochs', type=int, default=30)
+    parser.add_argument('--epochs', type=int, help='Tuned maximum defaults to 120; legacy to 30')
+    parser.add_argument('--training-mode', choices=('tuned', 'legacy'), default='tuned')
+    parser.add_argument('--early-stopping-patience', type=int, default=15)
+    parser.add_argument('--min-delta', type=float, default=1e-6)
+    parser.add_argument('--search-directory', type=Path)
+    parser.add_argument('--resume-search', action='store_true')
+    parser.add_argument('--search-trials', type=int, default=20, help='Total across both methods')
+    parser.add_argument('--search-stocks', type=int, default=6)
+    parser.add_argument('--model-directory', type=Path)
     parser.add_argument(
         '--parallel-gpus', type=int, default=1,
         help='Train independent stocks on this many GPUs (default: 1)',
@@ -470,6 +566,11 @@ def main() -> None:
         default=Path(__file__).resolve().parents[1] / 'log',
         help='Directory for timestamped training logs',
     )
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
     args.log_directory.mkdir(parents=True, exist_ok=True)
     log_path = args.log_directory / (

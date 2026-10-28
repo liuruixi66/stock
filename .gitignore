@@ -50,6 +50,8 @@ coverage.xml
 local_settings.py
 db.sqlite3
 backend/data/history/
+*.models/
+*.search/
 
 # Flask stuff:
 instance/

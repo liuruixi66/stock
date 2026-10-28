@@ -103,6 +103,34 @@ class FractionalComparisonTests(SimpleTestCase):
                 with self.assertRaises(ValueError):
                     compare(paths)
 
+    def test_branch_specific_frozen_models_are_supported(self):
+        first = self.result()
+        second_model = deepcopy(first['models']['600001.SH:de_prado'])
+        second_model['trials'][0]['trial']['hidden_size'] = 64
+        first['models']['600001.SH:log_return'] = second_model
+        second = deepcopy(first)
+        second['parameters']['seed'] = 44
+        with TemporaryDirectory() as directory:
+            paths = [Path(directory) / 'first.json', Path(directory) / 'second.json']
+            for path, data in zip(paths, (first, second)):
+                path.write_text(json.dumps(data), encoding='utf-8')
+            self.assertEqual(len(compare(paths)['实验明细']), 2)
+
+    def test_changed_early_stopping_or_selection_mode_is_rejected(self):
+        for field, value in (
+            ('early_stopping_patience', 15), ('selection_metric', 'return_mae'),
+            ('training_mode', 'tuned'),
+        ):
+            first = self.result()
+            second = deepcopy(first)
+            second['parameters'][field] = value
+            with TemporaryDirectory() as directory:
+                paths = [Path(directory) / 'first.json', Path(directory) / 'second.json']
+                for path, data in zip(paths, (first, second)):
+                    path.write_text(json.dumps(data), encoding='utf-8')
+                with self.assertRaises(ValueError):
+                    compare(paths)
+
     def test_legacy_and_versioned_price_policies_cannot_be_compared(self):
         first = self.result()
         second = deepcopy(first)

@@ -157,7 +157,7 @@ def model_charts(report, data):
     cards = []
     for title, key, description, percent in (
         ('各股票验证误差', '标准化验证均方误差',
-         '模型选型时的最优标准化验证 MSE，越低越好。不同差分方法的目标尺度不同，不宜只凭此值判断方法优劣。', False),
+         '选中 epoch 的标准化验证 MSE；默认按收益 MAE 选型，因此不一定是最低 MSE。不同差分方法的目标尺度不同，不能据此比较预测能力。', False),
         ('各股票测试收益率 MAE', '测试收益率平均绝对误差',
          '样本外下一交易日收益率预测的平均绝对误差，越低越好。1% 表示约 1 个百分点的收益率误差。', True),
         ('各股票最佳训练轮次', None,
@@ -173,16 +173,20 @@ def model_charts(report, data):
         cards.append(report.chart(title, description, rows, symbols, bars=True, percent=percent))
     trial_series = []
     for method, entries in grouped.items():
-        for size in sorted({
-            trial['试验配置']['隐藏单元数']
+        for size, layers in sorted({
+            (trial['试验配置']['隐藏单元数'], trial['试验配置'].get('LSTM层数', 1))
             for model in entries.values() for trial in model.get('候选试验', [])
         }):
             values = []
             for symbol in symbols:
                 trials = entries.get(symbol, {}).get('候选试验', [])
-                matches = [t['最后一轮标准化验证均方误差'] for t in trials if t['试验配置']['隐藏单元数'] == size]
+                matches = [
+                    t['最后一轮标准化验证均方误差'] for t in trials
+                    if (t['试验配置']['隐藏单元数'], t['试验配置'].get('LSTM层数', 1))
+                    == (size, layers)
+                ]
                 values.append(mean(matches) if matches else None)
-            trial_series.append((f'{method} H{size}', values))
+            trial_series.append((f'{method} H{size} L{layers}', values))
     if trial_series:
         cards.append(report.chart(
             '候选模型最终验证误差', '各隐藏单元配置最后一轮的验证 MSE，并非最佳轮次 MSE；滚动实验仅展示最后一个预测日。',
@@ -215,7 +219,8 @@ def model_charts(report, data):
             for trial in trials:
                 history = trial['逐轮训练记录']
                 extra.append(report.chart(
-                    f'{symbol} {method} H{trial["试验配置"]["隐藏单元数"]} 逐轮损失',
+                    f'{symbol} {method} H{trial["试验配置"]["隐藏单元数"]} '
+                    f'L{trial["试验配置"].get("LSTM层数", 1)} 逐轮损失',
                     '按代码排序首只具有记录的股票；滚动实验为最后一个预测日的候选训练。训练 MSE 是各批次更新前损失按样本数加权，验证 MSE 在该轮结束后计算。',
                     [('训练 MSE', [p['标准化训练均方误差'] for p in history]),
                      ('验证 MSE', [p['标准化验证均方误差'] for p in history])],

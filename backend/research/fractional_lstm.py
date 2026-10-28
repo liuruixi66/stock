@@ -9,12 +9,16 @@ from dataclasses import asdict, dataclass
 from datetime import date
 import logging
 from math import exp
+import os
+from pathlib import Path
 import time
 from typing import Sequence
 
 import numpy as np
 import pandas as pd
-from market_data.price_basis import ADJUSTED_BASIS, research_price_contract
+from market_data.price_basis import (
+    ADJUSTED_BASIS, PRICE_COLUMNS, frame_digest, research_price_contract,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +35,217 @@ class LSTMTrial:
     learning_rate: float = 0.001
     epochs: int = 30
     batch_size: int = 64
+    num_layers: int = 1
+    dropout: float = 0.0
 
     def validate(self) -> None:
-        for value in (self.hidden_size, self.epochs, self.batch_size):
+        for value in (self.hidden_size, self.epochs, self.batch_size, self.num_layers):
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise DifferencingError('LSTM sizes and epochs must be positive integers')
         if not np.isfinite(self.learning_rate) or not 0 < self.learning_rate < 1:
             raise DifferencingError('Invalid LSTM learning rate')
+        if (not np.isfinite(self.dropout) or not 0 <= self.dropout < 1
+                or (self.num_layers == 1 and self.dropout != 0)):
+            raise DifferencingError('Dropout requires multiple layers and a rate in [0, 1)')
+
+
+@dataclass
+class EarlyStopping:
+    patience: int = 15
+    min_delta: float = 1e-6
+    best_score: float = float('inf')
+    best_epoch: int = 0
+    significant_best: float = float('inf')
+    wait: int = 0
+
+    def __post_init__(self):
+        if (isinstance(self.patience, bool) or not isinstance(self.patience, int)
+                or self.patience < 0 or not np.isfinite(self.min_delta)
+                or self.min_delta < 0):
+            raise DifferencingError('Invalid early-stopping patience or min_delta')
+
+    def observe(self, score: float, epoch: int) -> tuple[bool, bool]:
+        if not np.isfinite(score):
+            raise DifferencingError('Non-finite validation selection score')
+        improved = score < self.best_score
+        if improved:
+            self.best_score, self.best_epoch = score, epoch
+        if score < self.significant_best - self.min_delta:
+            self.significant_best, self.wait = score, 0
+        else:
+            self.wait += 1
+        return improved, self.patience > 0 and self.wait >= self.patience
+
+
+def training_device(device_index: int | None = None):
+    os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
+    import torch
+
+    torch.set_num_threads(1)
+    torch.use_deterministic_algorithms(True)
+    count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    if device_index is not None:
+        if (isinstance(device_index, bool) or not isinstance(device_index, int)
+                or not 0 <= device_index < count):
+            raise DifferencingError(f'GPU index {device_index} unavailable; found {count}')
+        torch.cuda.set_device(device_index)
+    return torch.device(f'cuda:{device_index or 0}' if count else 'cpu')
+
+
+def build_network(features: int, trial: LSTMTrial):
+    from torch import nn
+
+    trial.validate()
+
+    class Network(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lstm = nn.LSTM(
+                features, trial.hidden_size, num_layers=trial.num_layers,
+                batch_first=True, dropout=trial.dropout,
+            )
+            self.output = nn.Linear(trial.hidden_size, 1)
+
+        def forward(self, values):
+            sequence, _ = self.lstm(values)
+            return self.output(sequence[:, -1]).squeeze(-1)
+
+    return Network()
+
+
+def return_context(data: dict, indices: np.ndarray, mean: float, scale: float) -> dict:
+    origins = data['origins'][indices]
+    offsets = [
+        invert_one_step(0.0, data['logs'][:origin + 1], data['weights'])
+        - data['logs'][origin] for origin in origins
+    ]
+    return {
+        'offsets': np.asarray(offsets),
+        'actual': np.expm1(data['logs'][origins + 1] - data['logs'][origins]),
+        'mean': mean, 'scale': scale,
+    }
+
+
+def reconstructed_returns(outputs: np.ndarray, context: dict) -> np.ndarray:
+    with np.errstate(over='ignore', invalid='ignore'):
+        values = np.expm1(
+            np.asarray(outputs, dtype=float) * context['scale']
+            + context['mean'] + context['offsets'],
+        )
+    if not np.isfinite(values).all():
+        raise DifferencingError('Non-finite reconstructed return predictions')
+    return values
+
+
+def fit_trial(
+    x, y, train_indices, validation_indices, trial: LSTMTrial, *,
+    seed: int = 42, patience: int = 0, min_delta: float = 1e-6,
+    context: dict | None = None, use_data_parallel: bool = False,
+    on_improvement=None,
+) -> dict:
+    """Fit one candidate; selection labels never enter gradient updates."""
+    import torch
+    from torch import nn
+
+    trial.validate()
+    stopping = EarlyStopping(patience, min_delta)
+    if not len(train_indices) or not len(validation_indices):
+        raise DifferencingError('Training and validation samples must be nonempty')
+    if set(train_indices.cpu().tolist()) & set(validation_indices.cpu().tolist()):
+        raise DifferencingError('Training and validation indices overlap')
+    torch.manual_seed(seed)
+    model = build_network(x.shape[-1], trial).to(x.device)
+    if use_data_parallel:
+        model = nn.DataParallel(model, device_ids=[0, 1])
+    optimizer = torch.optim.Adam(model.parameters(), lr=trial.learning_rate)
+    history, best = [], None
+    for epoch in range(1, trial.epochs + 1):
+        model.train()
+        training_loss_sum = torch.zeros((), device=x.device)
+        for batch in train_indices.split(trial.batch_size):
+            optimizer.zero_grad()
+            loss = nn.functional.mse_loss(model(x[batch]), y[batch])
+            if not torch.isfinite(loss):
+                raise DifferencingError('Non-finite LSTM training loss')
+            training_loss_sum += loss.detach() * len(batch)
+            loss.backward()
+            optimizer.step()
+        model.eval()
+        with torch.no_grad():
+            outputs = model(x[validation_indices])
+            mse = float(nn.functional.mse_loss(outputs, y[validation_indices]).item())
+        if not np.isfinite(mse):
+            raise DifferencingError('Non-finite LSTM validation loss')
+        score = mse if context is None else float(np.mean(np.abs(
+            reconstructed_returns(outputs.cpu().numpy(), context) - context['actual'],
+        )))
+        improved, stop = stopping.observe(score, epoch)
+        history.append({
+            'epoch': epoch,
+            'training_mse_scaled': float((training_loss_sum / len(train_indices)).item()),
+            'validation_mse_scaled': mse, 'selection_score': score,
+        })
+        if improved:
+            unwrapped = model.module if use_data_parallel else model
+            best = {
+                'model': {k: v.detach().cpu().clone()
+                          for k, v in unwrapped.state_dict().items()},
+                'epoch': epoch, 'validation_mse_scaled': mse,
+                'selection_score': score,
+            }
+            if on_improvement is not None:
+                on_improvement({**best, 'epoch_history': list(history)})
+        if stop:
+            break
+    if best is None:
+        raise DifferencingError('No finite model checkpoint selected')
+    return {
+        **best, 'epoch_history': history,
+        'stopped_early': len(history) < trial.epochs,
+        'selection_metric': 'scaled_mse' if context is None else 'return_mae',
+    }
+
+
+def atomic_replace(temporary: Path, destination: Path) -> None:
+    for attempt in range(6):
+        try:
+            os.replace(temporary, destination)
+            return
+        except PermissionError as exc:
+            # Windows scanners may briefly hold a just-written checkpoint open.
+            if getattr(exc, 'winerror', None) not in (5, 32, 33) or attempt == 5:
+                raise
+            logger.warning('Checkpoint replace locked; retrying %s (%d/5)',
+                           destination, attempt + 1)
+            time.sleep(0.05 * 2 ** attempt)
+
+
+def save_training_checkpoint(path: Path, payload: dict) -> None:
+    import torch
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + '.tmp')
+    with temporary.open('wb') as stream:
+        torch.save({
+            **payload, 'checkpoint_version': 1,
+            'price_contract': research_price_contract(),
+        }, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    atomic_replace(temporary, path)
+
+
+def load_training_checkpoint(path: Path):
+    import torch
+
+    payload = torch.load(path, map_location='cpu', weights_only=True)
+    if (payload.get('checkpoint_version') != 1
+            or payload.get('price_contract') != research_price_contract()):
+        raise DifferencingError('Incompatible training checkpoint or price contract')
+    model = build_network(payload['feature_count'], LSTMTrial(**payload['trial']))
+    model.load_state_dict(payload['model'])
+    return payload, model
 
 
 def prepare_sequences(
@@ -119,9 +327,15 @@ def train_stock(
     trials: Sequence[LSTMTrial] | None = None, seed: int = 42,
     walk_forward_validation_days: int = 60,
     device_index: int | None = None,
+    patience: int = 0, min_delta: float = 1e-6,
+    selection_metric: str = 'scaled_mse',
+    checkpoint_directory: Path | None = None,
 ) -> tuple[dict, dict[tuple[date, str], float]]:
     """逐预测日执行滚动选型、历史重训和下一交易日预测。"""
     config.validate()
+    EarlyStopping(patience, min_delta)
+    if selection_metric not in ('scaled_mse', 'return_mae'):
+        raise DifferencingError('Unknown LSTM selection metric')
     if frame.attrs.get('price_basis', ADJUSTED_BASIS) != ADJUSTED_BASIS:
         raise DifferencingError('LSTM requires adjusted research prices, not execution OHLC')
     if (isinstance(walk_forward_validation_days, bool)
@@ -154,37 +368,11 @@ def train_stock(
     for trial in trials:
         trial.validate()
 
-    import os
-
-    # 在导入 PyTorch 前设置 CUDA 确定性配置，并保持统计库先于 PyTorch 加载，
-    # 以降低 Intel OpenMP 运行库冲突风险；CUDA 初始化后再设置将不会生效。
-    os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
+    device = training_device(device_index)
     import torch
     from torch import nn
 
-    torch.set_num_threads(1)
-    torch.use_deterministic_algorithms(True)
     gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    if device_index is None:
-        device = torch.device('cuda:0' if gpu_count else 'cpu')
-    else:
-        if (isinstance(device_index, bool) or not isinstance(device_index, int)
-                or device_index < 0 or device_index >= gpu_count):
-            raise DifferencingError(
-                f'GPU index {device_index} is unavailable; detected {gpu_count} CUDA devices',
-            )
-        device = torch.device(f'cuda:{device_index}')
-        torch.cuda.set_device(device)
-
-    class Network(nn.Module):
-        def __init__(self, features: int, hidden: int):
-            super().__init__()
-            self.lstm = nn.LSTM(features, hidden, batch_first=True)
-            self.output = nn.Linear(hidden, 1)
-
-        def forward(self, values):
-            sequence, _ = self.lstm(values)
-            return self.output(sequence[:, -1]).squeeze(-1)
 
     loss_function = nn.MSELoss()
 
@@ -195,59 +383,29 @@ def train_stock(
     ) -> tuple[dict, float, dict, list]:
         best_state = None
         best_validation_loss = float('inf')
+        best_score = float('inf')
         selected_trial = None
         trial_results = []
         for trial_index, trial in enumerate(trials):
-            torch.manual_seed(seed)
-            model = Network(x.shape[-1], trial.hidden_size).to(device)
-            if use_data_parallel:
-                model = nn.DataParallel(model, device_ids=[0, 1])
-            optimizer = torch.optim.Adam(model.parameters(), lr=trial.learning_rate)
-            validation_loss = float('inf')
-            epoch_history = []
-            for epoch in range(trial.epochs):
-                model.train()
-                training_loss_sum = torch.zeros((), device=device)
-                for batch in train_indices.split(trial.batch_size):
-                    inputs = x[batch]
-                    targets = y[batch]
-                    optimizer.zero_grad()
-                    loss = loss_function(model(inputs), targets)
-                    if not torch.isfinite(loss):
-                        raise DifferencingError(f'Non-finite training loss for {symbol}')
-                    training_loss_sum += loss.detach() * len(batch)
-                    loss.backward()
-                    optimizer.step()
-                model.eval()
-                validation_inputs = x[validation_indices]
-                # 验证标签只计算留出误差以选模型/epoch，不参与反向传播。
-                with torch.no_grad():
-                    validation_loss = float(loss_function(
-                        model(validation_inputs), y[validation_indices],
-                    ).item())
-                if not np.isfinite(validation_loss):
-                    raise DifferencingError(f'Non-finite validation loss for {symbol}')
-                epoch_history.append({
-                    'epoch': epoch + 1,
-                    'training_mse_scaled': float(
-                        (training_loss_sum / len(train_indices)).item(),
-                    ),
-                    'validation_mse_scaled': validation_loss,
-                })
-                if validation_loss < best_validation_loss:
-                    best_validation_loss = validation_loss
-                    selected_trial = {
-                        'trial_index': trial_index, 'epoch': epoch + 1, **asdict(trial),
-                    }
-                    unwrapped = model.module if isinstance(model, nn.DataParallel) else model
-                    best_state = {
-                        name: value.detach().cpu().clone()
-                        for name, value in unwrapped.state_dict().items()
-                    }
+            result = fit_trial(
+                x, y, train_indices, validation_indices, trial,
+                seed=seed, patience=patience, min_delta=min_delta,
+                context=selection_context, use_data_parallel=use_data_parallel,
+            )
+            if result['selection_score'] < best_score:
+                best_score = result['selection_score']
+                best_validation_loss = result['validation_mse_scaled']
+                selected_trial = {
+                    'trial_index': trial_index, 'epoch': result['epoch'],
+                    **asdict(trial), 'selection_score': best_score,
+                    'selection_metric': result['selection_metric'],
+                }
+                best_state = result['model']
             trial_results.append({
                 'trial': asdict(trial),
-                'last_validation_mse_scaled': validation_loss,
-                'epoch_history': epoch_history,
+                'last_validation_mse_scaled': result['epoch_history'][-1]['validation_mse_scaled'],
+                'epoch_history': result['epoch_history'],
+                'stopped_early': result['stopped_early'],
             })
         if best_state is None or selected_trial is None:
             raise DifferencingError('No trained model selected')
@@ -307,6 +465,11 @@ def train_stock(
         ).to(device)
         train_indices = torch.from_numpy(train_indices_array).to(device)
         validation_indices = torch.from_numpy(validation_indices_array).to(device)
+        selection_context = (
+            return_context(
+                data, validation_indices_array, selection_y_mean, selection_y_scale,
+            ) if selection_metric == 'return_mae' else None
+        )
 
         used_data_parallel = False
         try:
@@ -354,7 +517,7 @@ def train_stock(
 
         final_trial = trials[int(best_metadata['trial_index'])]
         torch.manual_seed(seed)
-        final_model = Network(x.shape[-1], final_trial.hidden_size).to(device)
+        final_model = build_network(x.shape[-1], final_trial).to(device)
         if used_data_parallel:
             final_model = nn.DataParallel(final_model, device_ids=[0, 1])
         optimizer = torch.optim.Adam(final_model.parameters(), lr=final_trial.learning_rate)
@@ -396,6 +559,35 @@ def train_stock(
             'x_mean': x_mean.tolist(), 'x_scale': x_scale.tolist(),
             'y_mean': y_mean, 'y_scale': y_scale,
         }
+        if checkpoint_directory is not None:
+            common = {
+                'instrument': symbol, 'method': method,
+                'trial': asdict(final_trial), 'feature_count': int(x.shape[-1]),
+                'weights': data['weights'].tolist(), 'seed': seed,
+                'target_date': target_day.isoformat(),
+                'config': {k: v.isoformat() if isinstance(v, date) else v
+                           for k, v in asdict(config).items()},
+                'selected_model': best_metadata,
+                'selection_metric': selection_metric,
+                'early_stopping_patience': patience, 'min_delta': min_delta,
+                'selected_prices_sha256': frame_digest(
+                    frame[frame['date'] < target_day], PRICE_COLUMNS,
+                ),
+            }
+            destination = Path(checkpoint_directory) / f'{symbol}-{method}'
+            save_training_checkpoint(destination / 'validation-best.pt', {
+                **common, 'kind': 'validation_selection', 'model': best_model,
+                'scaler': {
+                    'x_mean': selection_x_mean.tolist(),
+                    'x_scale': selection_x_scale.tolist(),
+                    'y_mean': selection_y_mean, 'y_scale': selection_y_scale,
+                },
+                'validation_start': validation_start_day.isoformat(),
+            })
+            save_training_checkpoint(destination / 'refit-latest.pt', {
+                **common, 'kind': 'pre_target_refit', 'model': last_model,
+                'scaler': last_scaler, 'final_fit_samples': len(history_indices),
+            })
         last_metadata, last_loss, last_results = best_metadata, best_loss, results
         last_fit_count = len(history_indices)
         selection_counts[str(best_metadata['trial_index'])] += 1
@@ -435,6 +627,9 @@ def train_stock(
         'walk_forward_trial_selection_counts': selection_counts,
         'daily_selections': daily_selections,
         'selected_model': last_metadata, 'validation_mse_scaled': last_loss,
+        'selection_metric': selection_metric, 'early_stopping_patience': patience,
+        'min_delta': min_delta,
+        'checkpoint_directory': str(checkpoint_directory) if checkpoint_directory else None,
         'test_return_mae': float(np.mean(price_errors)) if price_errors else None,
         'trials': last_results, 'seed': seed,
         'training_device': str(device),
