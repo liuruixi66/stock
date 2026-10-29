@@ -25,6 +25,7 @@ from research.fractional_lstm import (
     LSTMTrial, evaluate_return_predictions, train_stock,
 )
 from research.fractional_results import chinese_result
+from research.experiment_runs import tracked_run
 from market_data.price_basis import research_price_contract
 
 
@@ -527,8 +528,8 @@ def build_parser() -> argparse.ArgumentParser:
         '--database', type=Path, default=STOCKS_DATABASE_PATH,
         help='Read-only stocks.db path',
     )
-    parser.add_argument('--output', type=Path, required=True,
-                        help='Chinese JSON results, including saved forecasts; refuses overwrite')
+    parser.add_argument('--output', type=Path,
+                        help='Chinese JSON results; default: new numbered run directory')
     parser.add_argument('--seed', type=int, default=42,
                         help='Stock-sample/search seed; walk-forward initialization stays 42')
     parser.add_argument('--universe-size', type=int, default=30)
@@ -563,8 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--signal-threshold', type=float, default=0.002)
     parser.add_argument(
         '--log-directory', type=Path,
-        default=Path(__file__).resolve().parents[1] / 'log',
-        help='Directory for timestamped training logs',
+        help='Directory for logs; default: logs inside the numbered run',
     )
     return parser
 
@@ -572,6 +572,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    with tracked_run(
+        'fractional-training', args.output,
+        resume=args.output is not None and _checkpoint_path(args.output).exists(),
+    ) as experiment:
+        args.output = experiment.artifact
+        args.log_directory = args.log_directory or experiment.directory / 'logs'
+        _execute(args, parser, experiment)
+
+
+def _execute(args, parser, experiment) -> None:
     args.log_directory.mkdir(parents=True, exist_ok=True)
     log_path = args.log_directory / (
         f'fractional-research-seed-{args.seed}-{strftime("%Y%m%d-%H%M%S")}.log'
@@ -588,9 +598,13 @@ def main() -> None:
     )
     listener.start()
     _configure_worker_logging(log_queue)
+    logging.info('Experiment ID: %s (%s)', experiment.run_id, experiment.directory)
     logging.info('Training log: %s', log_path)
     try:
         result = run(args)
+        result['experiment_run_id'] = experiment.run_id
+        experiment.metadata['parameters'] = result['parameters']
+        experiment.metadata['data_provenance'] = result['data_provenance']
         with args.output.open('x', encoding='utf-8') as output:
             json.dump(chinese_result(result), output, ensure_ascii=False, allow_nan=False, indent=2)
         _checkpoint_path(args.output).unlink()

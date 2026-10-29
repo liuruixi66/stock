@@ -182,9 +182,12 @@ class TrainingControlsTests(SimpleTestCase):
             scaler = payload['scaler']
             x = ((data['raw_x'][-1:] - np.asarray(scaler['x_mean']))
                  / np.asarray(scaler['x_scale'])).astype(np.float32)
+            # Compare on the training backend; CPU/CUDA FP32 kernels can differ.
+            device = torch.device(metadata['training_device'])
+            model.to(device)
             model.eval()
             with torch.no_grad():
-                value = model(torch.from_numpy(x)).item()
+                value = model(torch.from_numpy(x).to(device)).item()
             origin = data['origins'][-1]
             transformed = value * scaler['y_scale'] + scaler['y_mean']
             predicted_log = invert_one_step(

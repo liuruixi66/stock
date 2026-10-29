@@ -1,4 +1,4 @@
-"""Generate self-contained Chinese HTML/SVG reports from saved experiments."""
+"""Plot saved experiments and Optuna searches as static Seaborn images."""
 
 import argparse
 from collections import defaultdict
@@ -38,8 +38,7 @@ def label(value):
     return escape(str(value), quote=True)
 
 
-def svg_chart(title, series, categories, *, bars=False, percent=False, numeric_x=False):
-    """Render all observations; lines use real calendar spacing when dated."""
+def chart_data(title, series, categories, *, bars=False, numeric_x=False):
     if not categories or not series:
         raise ValueError(f'Empty chart: {title}')
     for _, values in series:
@@ -48,11 +47,6 @@ def svg_chart(title, series, categories, *, bars=False, percent=False, numeric_x
     values = [number(v) for _, row in series for v in row if v is not None]
     if not values:
         raise ValueError(f'No finite observations: {title}')
-    low, high = min(0, min(values)), max(0, max(values))
-    padding = (high - low) * 0.08 or 1
-    low, high = low - padding, high + padding
-    left, top, width, height = 85, 65, 650, 290
-    y = lambda value: top + height * (high - value) / (high - low)
     if bars:
         positions = list(range(len(categories)))
     elif numeric_x:
@@ -63,6 +57,19 @@ def svg_chart(title, series, categories, *, bars=False, percent=False, numeric_x
         positions = [date.fromisoformat(day).toordinal() for day in categories]
         if positions != sorted(set(positions)):
             raise ValueError(f'Dates must be unique and ascending: {title}')
+    return values, positions
+
+
+def svg_chart(title, series, categories, *, bars=False, percent=False, numeric_x=False):
+    """Render all observations; lines use real calendar spacing when dated."""
+    values, positions = chart_data(
+        title, series, categories, bars=bars, numeric_x=numeric_x,
+    )
+    low, high = min(0, min(values)), max(0, max(values))
+    padding = (high - low) * 0.08 or 1
+    low, high = low - padding, high + padding
+    left, top, width, height = 85, 65, 650, 290
+    y = lambda value: top + height * (high - value) / (high - low)
     span = positions[-1] - positions[0] or 1
     x = lambda index: (
         left + width * (index + 0.5) / len(categories) if bars
@@ -142,6 +149,151 @@ class Report:
 
     def section(self, title, cards):
         self.sections.append(f'<h2>{label(title)}</h2><div class="grid">{"".join(cards)}</div>')
+
+
+class SeabornReport(Report):
+    def __init__(self, directory, image_format='png', dpi=180):
+        super().__init__(directory)
+        if image_format not in ('png', 'svg', 'pdf') or dpi < 72:
+            raise ValueError('Static format must be png/svg/pdf and DPI must be >= 72')
+        import matplotlib
+
+        matplotlib.use('Agg')
+        self.image_format, self.dpi = image_format, dpi
+        self.charts = []
+
+    def chart(self, title, description, series, categories, **options):
+        if not any(value is not None for _, row in series for value in row):
+            self.charts.append({'title': title, 'description': description, 'status': 'unavailable'})
+            return ''
+        figure = self.figure(title, series, categories, **options)
+        import matplotlib.pyplot as plt
+
+        filename = f'chart-{self.count + 1:02d}.{self.image_format}'
+        try:
+            figure.savefig(self.directory / filename, dpi=self.dpi, bbox_inches='tight')
+        finally:
+            plt.close(figure)
+        self.count += 1
+        self.charts.append({'file': filename, 'title': title, 'description': description})
+        return ''
+
+    def figure(self, title, series, categories, *, bars=False, percent=False, numeric_x=False):
+        chart_data(title, series, categories, bars=bars, numeric_x=numeric_x)
+        import matplotlib.dates as mdates
+        from matplotlib import font_manager
+        import matplotlib.pyplot as plt
+        from matplotlib.ticker import PercentFormatter
+        import pandas as pd
+        import seaborn as sns
+
+        installed = {font.name for font in font_manager.fontManager.ttflist}
+        fonts = [name for name in ('Microsoft YaHei', 'SimHei', 'Noto Sans CJK SC')
+                 if name in installed]
+        if not fonts:
+            raise ValueError('Install a Chinese font (Microsoft YaHei/SimHei/Noto Sans CJK SC)')
+        sns.set_theme(style='whitegrid', rc={'font.sans-serif': fonts, 'axes.unicode_minus': False})
+        rows = []
+        for name, values in series:
+            segment = 0
+            for category, value in zip(categories, values):
+                if value is None:
+                    segment += 1
+                    continue
+                x = category if bars else (
+                    float(category) if numeric_x else pd.Timestamp(category)
+                )
+                rows.append({'x': x, 'value': number(value), 'method': name, 'segment': segment})
+        frame = pd.DataFrame(rows)
+        figure, axis = plt.subplots(figsize=(max(12, min(24, len(categories) * .85)) if bars else 12, 6))
+        try:
+            palette = sns.color_palette('deep', len(series))
+            names = [name for name, _ in series]
+            if bars:
+                sns.barplot(data=frame, x='x', y='value', hue='method', hue_order=names,
+                            order=list(categories), palette=palette, errorbar=None, ax=axis)
+                axis.tick_params(axis='x', labelrotation=25)
+            else:
+                sns.lineplot(data=frame, x='x', y='value', hue='method', hue_order=names,
+                             units='segment', estimator=None, sort=False, palette=palette,
+                             marker='o' if len(categories) < 3 else None, ax=axis)
+                if not numeric_x:
+                    locator = mdates.AutoDateLocator(minticks=3, maxticks=8)
+                    axis.xaxis.set_major_locator(locator)
+                    axis.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+            if percent:
+                axis.yaxis.set_major_formatter(PercentFormatter(xmax=1))
+            axis.axhline(0, color='gray', linewidth=.7)
+            axis.set(title=title, xlabel='', ylabel='')
+            axis.legend(title='', fontsize=9, loc='best')
+            figure.tight_layout()
+            return figure
+        except Exception:
+            plt.close(figure)
+            raise
+
+    def section(self, title, cards):
+        pass
+
+    def finish(self, source, notes):
+        (self.directory / 'charts.json').write_text(json.dumps({
+            'source': str(source.resolve()), 'format': self.image_format,
+            'notes': notes, 'charts': self.charts,
+        }, ensure_ascii=False, allow_nan=False, indent=2), encoding='utf-8')
+
+
+def search_charts(report, data):
+    methods = data['methods']
+    if not methods:
+        raise ValueError('Search report lacks methods')
+    names = {'de_prado': METHODS[0], 'log_return': METHODS[1]}
+    report.chart(
+        '搜索赢家相对 MAE（低于 1 才优于零收益）',
+        '历史验证折等权平均；同一验证集调参及评分，有选型偏差，不是独立测试。',
+        [(names.get(method, method), [value['relative_mae']]) for method, value in methods.items()]
+        + [('零收益基线', [1.0])], ['相对 MAE'], bars=True,
+    )
+    for method, result in methods.items():
+        name = names.get(method, method)
+        completed = [trial for trial in result['trials'] if trial['state'] == 'COMPLETE']
+        if completed:
+            report.chart(
+                f'{name} 完整试验对比', '仅比较 COMPLETE 的完整目标值；剪枝和失败不当作完整评分。',
+                [(name, [trial['value'] for trial in completed]),
+                 ('零收益基线', [1.0] * len(completed))],
+                [str(trial['number']) for trial in completed], bars=True,
+            )
+        folds = result['best_folds']
+        if not folds:
+            raise ValueError(f'No winner folds: {method}')
+        labels = [f'{fold["instrument"]} / {fold["validation_start"][:4]}' for fold in folds]
+        report.chart(
+            f'{name} 各折相对 MAE', '每只股票、每个验证年的真实记录；低于 1 表示该折优于零收益。',
+            [(name, [fold['relative_mae'] for fold in folds]),
+             ('零收益基线', [1.0] * len(folds))], labels, bars=True,
+        )
+        report.chart(
+            f'{name} 最佳轮次与实际训练轮数', '最佳轮次与早停前实际轮数不同；不能用训练上限代替实际训练量。',
+            [('最佳 epoch', [fold['epoch'] for fold in folds]),
+             ('实际训练轮数', [fold['epochs_run'] for fold in folds])], labels, bars=True,
+        )
+        for fold in folds:
+            history = fold['epoch_history']
+            if not history:
+                raise ValueError(f'Missing epoch history: {method} {fold["instrument"]}')
+            categories = [str(point['epoch']) for point in history]
+            heading = f'{name} {fold["instrument"]} {fold["validation_start"][:4]}'
+            report.chart(
+                f'{heading} 逐轮损失', '训练/验证标准化 MSE；跨差分方法不可直接比较目标尺度。',
+                [('训练 MSE', [point['training_mse_scaled'] for point in history]),
+                 ('验证 MSE', [point['validation_mse_scaled'] for point in history])],
+                categories, numeric_x=True,
+            )
+            report.chart(
+                f'{heading} 选型指标', '实际早停指标为逆差分后的收益 MAE，不是标准化验证 MSE。',
+                [('验证收益 MAE', [point['selection_score'] for point in history])],
+                categories, numeric_x=True, percent=True,
+            )
 
 
 def model_charts(report, data):
@@ -310,18 +462,40 @@ def page(title, content):
     return f'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{label(title)}</title><style>{STYLE}</style><body><main><h1>{label(title)}</h1>{content}</main></body></html>'
 
 
-def generate(source, output, execution=None):
-    data = chinese_result(json.loads(source.read_text(encoding='utf-8')))
+def generate(source, output, execution=None, *, image_format='html', dpi=180):
+    raw = json.loads(source.read_text(encoding='utf-8'))
+    if image_format not in ('html', 'png', 'svg', 'pdf'):
+        raise ValueError('Unsupported report format')
+    is_search = 'search_version' in raw
+    if is_search:
+        if image_format == 'html' or execution is not None:
+            raise ValueError('Search reports require static images and no execution replay')
+        output.mkdir(parents=True, exist_ok=False)
+        report = SeabornReport(output, image_format, dpi)
+        search_charts(report, raw)
+        report.finish(source, [
+            '历史验证选型记录，不是独立测试或实盘收益；失败与剪枝不作为完整试验比较。',
+            '不支持从训练误差推断交易收益；本报告不重新训练。',
+        ])
+        return report.count
+    data = chinese_result(raw)
     parameters = data['实验参数']
     seed = parameters['随机种子']
     output.mkdir(parents=True, exist_ok=False)
-    report = Report(output)
+    report = Report(output) if image_format == 'html' else SeabornReport(output, image_format, dpi)
     model_charts(report, data)
     financial_charts(report, data['回测结果'], parameters['初始资金'], '二、原研究模拟：金融表现')
     if execution:
         financial_charts(report, execution['子样本原模拟'], parameters['初始资金'], '三、筛选子样本：原模拟控制组')
         financial_charts(report, execution['有限交易约束模拟'], parameters['初始资金'], '四、筛选子样本：有限交易约束')
         report.sections.append('<p class="note">' + '<br>'.join(label(note) for note in execution['解释限制']) + '</p>')
+    if image_format != 'html':
+        report.finish(source, [
+            '仅复用保存结果，不重新训练。研究模拟不是真实 A 股执行验证。',
+            '股票池存在幸存者偏差；供应商复权快照与原价均未获实盘认证。',
+            '缺失指标不绘制；逐轮损失仅限实际保存的记录，不还原未保存的训练过程。',
+        ] + (execution['解释限制'] if execution else []))
+        return report.count
     intro = (
         '<nav><a href="../index.html">返回报告目录</a><a href="#charts">查看图表</a></nav>'
         f'<p>股票池种子：{label(seed)} · 测试期：{label(parameters["测试开始日期"])} — {label(parameters["测试结束日期"])}'
@@ -346,12 +520,17 @@ def main():
     parser.add_argument('results', type=Path, nargs='+', help='Completed experiment JSON files')
     parser.add_argument('--output-directory', type=Path, required=True, help='New directory; refuses overwrite')
     parser.add_argument('--execution-results', type=Path, help='Optional execution sensitivity JSON')
+    parser.add_argument('--format', choices=('png', 'svg', 'pdf', 'html'), default='png',
+                        help='Default: static PNG; HTML must be explicitly requested')
+    parser.add_argument('--dpi', type=int, default=180)
     args = parser.parse_args()
     try:
         if args.output_directory.exists():
             raise ValueError('Refusing to overwrite an existing report directory')
         if len({p.stem for p in args.results}) != len(args.results):
             raise ValueError('Input result filenames must have unique stems')
+        if args.dpi < 72:
+            raise ValueError('DPI must be >= 72')
         execution_by_source = {}
         if args.execution_results:
             replay = chinese_result(json.loads(args.execution_results.read_text(encoding='utf-8')))
@@ -366,13 +545,17 @@ def main():
         args.output_directory.mkdir(parents=True)
         links = []
         for source in args.results:
-            count = generate(source, args.output_directory / source.stem, execution_by_source.get(source.resolve()))
+            count = generate(
+                source, args.output_directory / source.stem,
+                execution_by_source.get(source.resolve()), image_format=args.format, dpi=args.dpi,
+            )
             links.append(f'<li><a href="{label(source.stem)}/index.html">{label(source.name)}</a> · {count} 张图</li>')
             print(f'{source.name}: {count} charts')
-        index = args.output_directory / 'index.html'
-        index.write_text(page('模型与金融指标可视化', '<p>各随机股票池独立展示；点击下方报告。所有图表均可离线查看、下载 SVG。</p><ul>' + ''.join(links) + '</ul>'), encoding='utf-8')
-        print(index.resolve())
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+        if args.format == 'html':
+            index = args.output_directory / 'index.html'
+            index.write_text(page('模型与金融指标可视化', '<p>各随机股票池独立展示；点击下方报告。所有图表均可离线查看、下载 SVG。</p><ul>' + ''.join(links) + '</ul>'), encoding='utf-8')
+        print(args.output_directory.resolve())
+    except (OSError, ValueError, KeyError, TypeError, ImportError) as exc:
         parser.exit(1, f'Visualization failed: {exc}\n')
 
 

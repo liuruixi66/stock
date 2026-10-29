@@ -5,6 +5,7 @@ from typing import overload
 
 
 FIELD_NAMES = {
+    'experiment_run_id': '实验编号',
     'price_contract': '价格口径约定',
     'vendor_ohlc_sha256': '供应商OHLC行情SHA256',
     'corporate_actions_sha256': '公司行动SHA256',

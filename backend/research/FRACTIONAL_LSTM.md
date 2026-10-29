@@ -157,13 +157,53 @@ python -m tools.verify_fractional_sources `
 在 `backend` 目录下运行数据库研究实验：
 
 需要 Python 3.11+ 及 `requirements-research.txt` 的依赖（含 Optuna）。
-本机验证使用项目虚拟环境的 Python 3.13 CPU 版本；实际命令的解释器为
-`..\.venv\Scripts\python.exe`。CUDA 仅在兼容环境可用时自动选用，
-不以临时枚举补丁或关闭 OpenMP 冲突检查绕过环境问题。
+本机股票项目使用独立 Conda 前缀 `stock\.venv312`（Python 3.12），
+对应研究命令的解释器为 `..\.venv312\python.exe`。
+原 `stock\.venv` 是保留的 Python 3.13 CPU 环境，不要混淆两个解释器。
+CUDA 仅在兼容环境可用时自动选用，不以临时枚举补丁或
+`KMP_DUPLICATE_LIB_OK` 绕过兼容性及 OpenMP 冲突检查。
+这只是本机环境升级，不改变项目原有 Python 3.11+ 支持声明。
+
+从 `backend` 目录安装或重建同类研究环境：
+
+```powershell
+conda create --prefix ..\.venv312 python=3.12 pip --no-default-packages --yes
+..\.venv312\python.exe -m pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128
+..\.venv312\python.exe -m pip install -r .\requirements.txt -r .\requirements-research.txt
+..\.venv312\python.exe -m pip check
+```
+
+使用官方 CUDA wheel；不把 CPU 版 torch 或旧 Conda 数值计算包复制到新环境。
+下面示例中的 `python` 应指向所选的 3.12 解释器；不激活终端时可始终使用上述完整相对路径。
 
 ```powershell
 python -m tools.run_fractional_research --output .\research_charts\fractional-lstm-tuned.json
 ```
+
+### 实验编号与最新结果
+
+三个训练入口（`tools.run_fractional_research`、`tools.tune_fractional_lstm`、
+`tools.run_market_rotation`）共用 `research_charts/runs/run-000001` 形式的递增编号。
+不指定原来的输出参数时，自动为每次启动分配独立目录：
+
+```powershell
+python -m tools.run_fractional_research
+python -m tools.tune_fractional_lstm
+python -m tools.list_research_runs
+python -m tools.list_research_runs --latest
+python -m tools.list_research_runs --latest --kind fractional-training
+```
+
+`run.json` 保存编号、类型、状态、起止时间、结果绝对路径、参数与数据溯源。
+默认训练结果、日志、搜索和模型权重都留在该次运行目录；旧目录不移动、不重新编号。
+显式指定输出路径仍兼容，但同样登记编号及结果位置。
+编号表示启动顺序；“最新”取**编号最大的成功完成项**，不是最近修改的任意文件。
+失败、处理中、被中断的实验会列出状态，不冒充最新成功训练；没有成功项时明确提示。
+未产生正式结果文件不能标记完成。强制终止进程可能留下 `running`，仍不会成为最新成功项。
+同一输出断点续跑保留编号和累计尝试次数：fractional 继续传原 `--output`（须有 progress），
+独立搜索继续传原 `--directory` 加 `--resume`；已成功完成项不可被重新标成新训练。
+目录编号通过原子创建分配，支持多个独立任务并发启动。现有历史产物仍按原路径查看。
+编号和图片是输出管理功能，并不改变训练数据或模型预测。
 
 命令行工具会将 JSON 字段名和说明文字输出为中文；技术标识符、股票代码、GPU 名称和模型权重键保持原样。
 现有模拟器按照每年 252 个交易日的口径计算年化收益率。样本比较报告还会汇总年化收益率的平均值、最小值和最大值。
@@ -282,7 +322,12 @@ python -m tools.plot_fractional_research `
   --output-directory .\research_charts
 ```
 
-直接打开 `research_charts/index.html`，选择股票池报告。输出目录必须不存在，以防覆盖；
+默认以 Seaborn + Matplotlib 的非交互后端生成 PNG，不启动浏览器、不生成 HTML。
+每个来源结果独立子目录保存 `chart-NN.png` 和 `charts.json`（标题、说明、来源绝对路径及限制）。
+支持 `--format svg` / `--format pdf` 与 `--dpi 180`；图片渲染需要研究依赖中的
+Matplotlib、Seaborn，以及微软雅黑、黑体或 Noto Sans CJK SC 字体。
+显式指定 `--format html` 才保留原来的离线 HTML/SVG 报告。
+输出目录必须不存在，以防覆盖；
 可以指定新的目录再次生成。`--execution-results` 可省略，提供时必须与输入结果的绝对来源路径匹配。
 尚在运行的 `.progress.jsonl` 不是完整回测结果，不能作为输入。
 
@@ -296,6 +341,19 @@ python -m tools.plot_fractional_research `
 并保留原有逐日选型记录。报告为每种方法按代码排序选第一只具有逐轮记录的股票展示候选模型曲线。
 训练 MSE 是各批次参数更新前损失按样本数加权的平均值，验证 MSE 在 epoch 结束后计算；
 这些记录不参与选型或改变预测。逐日滚动验证误差与同一模型逐轮收敛是不同概念。
+
+Optuna 的原始 `report.json` 也可直接绘图（只支持静态格式），不需要重新搜索或训练：
+
+```powershell
+python -m tools.plot_fractional_research `
+  .\research_charts\lstm-tuning-tpe-20261028\report.json `
+  --output-directory .\research_charts\lstm-search-images-new --format png
+```
+
+包括赢家相对 MAE、完整试验对比、每股每年验证折相对 MAE、最佳 epoch 与实际训练轮数，
+以及每个赢家验证折的逐轮 MSE 和实际早停指标（逆差分后的收益 MAE）。
+失败/剪枝试验不作为完整目标值比较；验证集既选型又评分，不能当独立测试或实盘表现。
+静态图保留完整日期与缺失观测间断，不插值、不用零填补缺失指标。
 
 ## 交易费用敏感性复算
 
@@ -316,5 +374,26 @@ python -m tools.replay_fractional_execution \
 - 买入按 100 股一手，卖出数量不得超过已交收股数。
 
 上述当前费用会统一应用于整个历史测试区间，并不代表各历史年份实际执行的费率。结果会分别列出佣金、过户费和印花税。
-数据库未提供经过核实的历史每日涨跌停价、ST 状态或股息到账日期。模拟器不模拟涨跌停成交，也不计算股息税；股息作为不可用于交易的应收款处理。
+旧研究路径未接入经过核实的历史每日涨跌停价、ST 状态或股息到账日期。模拟器不模拟涨跌停成交，也不计算股息税；股息作为不可用于交易的应收款处理。
 名义价格数据也尚未经过外部核验。因此，结果仅供费用敏感性研究，不应视为可直接执行的回测结果或实盘收益。
+
+### 严格执行验证的数据门禁
+
+旧研究路径只读取 `cn_daily`，上述限制不代表同一数据库永远没有其他来源的数据。
+若库中已有 `ts_daily`、`ts_stk_limit`、`ts_dividend`、交易日历及停牌记录，
+须分别检查实际股票/日期覆盖，不能因为存在表名就宣称可用于真实执行。
+可对之前搜索中冻结的股票清单做只读检查：
+
+```powershell
+python -m tools.audit_fractional_execution_readiness `
+  .\research_charts\lstm-tuning-tpe-20261028\report.json `
+  --start 2025-01-01 --end 2026-10-28 --capital 200000 `
+  --output .\research_charts\execution-readiness-new.json
+```
+
+报告列出交易日历缺口、每股原价/涨跌停/复权因子覆盖、停牌记录、
+实施分红的关键日期缺失、两来源 OHLC 不一致和历史名称记录数量。
+空分红/停牌查询不能证明无事件；缺失行情必须结合停牌核对，不前向填充。
+目前两种 fractional 模拟器尚未接入这些执行字段，也缺少完整涨跌停成交、
+税务批次、历史风险状态和流动性规则，故门禁明确返回 `blocked`、
+`simulation_executed=false`，不计算或输出所谓实盘收益。

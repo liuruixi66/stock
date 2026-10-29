@@ -435,7 +435,7 @@ def run(args, state, update):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--database', type=Path, default=STOCKS_DATABASE_PATH)
-    parser.add_argument('--output-directory', type=Path, required=True)
+    parser.add_argument('--output-directory', type=Path, help='Default: new numbered run artifacts')
     parser.add_argument('--epochs', type=int, default=20)
     parser.add_argument('--batch-size', type=int, default=512)
     parser.add_argument('--threads', type=int, default=4)
@@ -452,6 +452,15 @@ def main():
         parser.error('Epochs, batch size and threads must be positive; symbol limit >= 0')
     if not args.database.is_file():
         parser.error(f'Database not found: {args.database}')
+    from research.experiment_runs import tracked_run
+
+    artifact = args.output_directory / 'results.json' if args.output_directory is not None else None
+    with tracked_run('rotation-training', artifact) as experiment:
+        args.output_directory = experiment.artifact.parent
+        _execute(args, experiment)
+
+
+def _execute(args, experiment):
     args.output_directory.mkdir(parents=True, exist_ok=False)
     logging.basicConfig(
         level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s',
@@ -459,7 +468,8 @@ def main():
                   logging.StreamHandler()],
     )
     state = {'status': 'starting', 'epochs': [], 'limitations': LIMITATIONS,
-             'requested_epochs': args.epochs}
+             'requested_epochs': args.epochs, 'experiment_run_id': experiment.run_id}
+    logger.info('Experiment ID: %s (%s)', experiment.run_id, experiment.directory)
 
     def update():
         state['updated_at'] = datetime.now().astimezone().isoformat()
@@ -468,6 +478,8 @@ def main():
     update()
     try:
         run(args, state, update)
+        experiment.metadata['parameters'] = state['config']
+        experiment.metadata['data_provenance'] = state['provenance']
     except (OSError, ValueError, RuntimeError, ImportError, sqlite3.Error):
         logger.exception('Shared-model research stopped')
         state['status'] = 'failed'

@@ -10,7 +10,7 @@ from xml.etree import ElementTree
 
 from research.fractional_results import chinese_result
 from tools.plot_fractional_research import (
-    Report, financial_charts, generate, model_charts, svg_chart,
+    Report, SeabornReport, financial_charts, generate, main, model_charts, svg_chart,
 )
 
 
@@ -147,6 +147,92 @@ class FractionalChartTests(TestCase):
         self.assertIn('&lt;unsafe&gt;', svg)
         self.assertIn('A&amp;B', svg)
         ElementTree.fromstring(svg)
+
+
+@skipUnless(importlib.util.find_spec('seaborn'), 'Optional research dependency: seaborn')
+class FractionalStaticChartTests(TestCase):
+    result = FractionalChartTests.result
+
+    def test_static_png_has_real_images_and_no_html_for_both_schemas(self):
+        for localized in (False, True):
+            with self.subTest(localized=localized), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / 'result.json'
+                data = self.result()
+                source.write_text(json.dumps(chinese_result(data) if localized else data), encoding='utf-8')
+                count = generate(source, root / 'report', image_format='png', dpi=72)
+                self.assertEqual(count, 9)
+                self.assertFalse(list((root / 'report').glob('*.html')))
+                images = list((root / 'report').glob('*.png'))
+                self.assertEqual(len(images), count)
+                for image in images:
+                    self.assertTrue(image.read_bytes().startswith(b'\x89PNG\r\n\x1a\n'))
+                manifest = json.loads((root / 'report' / 'charts.json').read_text(encoding='utf-8'))
+                self.assertEqual(manifest['format'], 'png')
+                self.assertEqual(manifest['source'], str(source.resolve()))
+                self.assertEqual(sum('file' in item for item in manifest['charts']), count)
+
+    def test_static_lines_keep_missing_observations_as_separate_segments(self):
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        with TemporaryDirectory() as directory:
+            report = SeabornReport(Path(directory))
+            figure = report.figure('Gap', [('A', [1, None, 3])],
+                                   ['2025-01-01', '2025-01-02', '2025-01-03'])
+            try:
+                lines = [line for line in figure.axes[0].lines
+                         if np.array_equal(line.get_ydata(), [1])
+                         or np.array_equal(line.get_ydata(), [3])]
+                self.assertEqual(len(lines), 2)
+            finally:
+                plt.close(figure)
+            with self.assertRaises(ValueError):
+                report.figure('Invalid', [('A', [float('inf')])], ['2025-01-01'])
+            with self.assertRaises(ValueError):
+                report.figure('Invalid', [('A', [1, 2])], ['2', '1'], numeric_x=True)
+
+    def test_search_charts_exclude_incomplete_trial_scores_and_keep_histories(self):
+        fold = {
+            'instrument': '600001.SH', 'validation_start': '2012-01-01',
+            'relative_mae': 1.1, 'epoch': 1, 'epochs_run': 2,
+            'epoch_history': [
+                {'epoch': 1, 'training_mse_scaled': .8,
+                 'validation_mse_scaled': .9, 'selection_score': .01},
+                {'epoch': 2, 'training_mse_scaled': .7,
+                 'validation_mse_scaled': 1.1, 'selection_score': .02},
+            ],
+        }
+        data = {'search_version': 2, 'methods': {'log_return': {
+            'relative_mae': 1.1, 'best_folds': [fold],
+            'trials': [{'number': 0, 'state': 'COMPLETE', 'value': 1.1},
+                       {'number': 1, 'state': 'FAIL', 'value': None},
+                       {'number': 2, 'state': 'PRUNED', 'value': .5}],
+        }}}
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'report.json'
+            source.write_text(json.dumps(data), encoding='utf-8')
+            self.assertEqual(generate(source, root / 'images', image_format='svg'), 6)
+            self.assertFalse(list((root / 'images').glob('*.html')))
+            text = (root / 'images' / 'chart-02.svg').read_text(encoding='utf-8')
+            self.assertIn('COMPLETE', json.loads(
+                (root / 'images' / 'charts.json').read_text(encoding='utf-8')
+            )['charts'][1]['description'])
+            self.assertIn('<svg', text)
+
+    def test_cli_defaults_to_png_and_pdf_remains_static(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'sample.json'
+            source.write_text(json.dumps(self.result()), encoding='utf-8')
+            with patch('sys.argv', ['plot', str(source), '--output-directory', str(root / 'out')]):
+                main()
+            self.assertTrue(list((root / 'out' / 'sample').glob('*.png')))
+            self.assertFalse(list((root / 'out').rglob('*.html')))
+            report = SeabornReport(root, 'pdf', dpi=72)
+            report.chart('PDF', 'Static', [('A', [1])], ['Metric'], bars=True)
+            self.assertTrue((root / 'chart-01.pdf').read_bytes().startswith(b'%PDF'))
 
 
 class FractionalTrainingHistoryTests(TestCase):
