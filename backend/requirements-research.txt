@@ -1,0 +1,7 @@
+# Optional, isolated environment for arXiv:2505.19243 method migration.
+numpy>=1.26,<3
+pandas>=2.1,<3
+statsmodels>=0.14,<0.15
+torch>=2.5,<3
+optuna>=4.5,<5
+pypdf>=5.9,<7

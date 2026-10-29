@@ -1,16 +1,16 @@
 #!/usr/bin/env python
-"""Django's command-line utility for administrative tasks."""
+"""Django 管理命令入口，例如运行服务、数据库迁移和自定义交易命令。"""
 import os
 import sys
 
 
 def main():
-    """Run administrative tasks."""
-    # 添加instock模块路径
+    """设置项目导入路径并将命令行参数交给 Django 管理命令执行。"""
+    # 兼容旧版 instock 模块目录：将其加入导入路径，供依赖该目录的模块解析。
     stock_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../stock'))
     sys.path.insert(0, stock_path)
     
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

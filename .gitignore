@@ -49,6 +49,9 @@ coverage.xml
 *.log
 local_settings.py
 db.sqlite3
+backend/data/history/
+*.models/
+*.search/
 
 # Flask stuff:
 instance/
@@ -127,3 +130,8 @@ dist/
 .env.development.local
 .env.test.local
 .env.production.local 
+
+*.json
+
+# Generated offline research charts
+backend/research_charts/

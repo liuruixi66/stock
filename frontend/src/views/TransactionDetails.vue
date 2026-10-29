@@ -1,710 +1,495 @@
 <template>
   <div class="transaction-details">
-    <!-- 策略头部区域 -->
-    <div class="strategy-header">
-      <div class="strategy-title">
-        <h1>{{ strategyInfo.name }}</h1>
-        <i class="fa fa-edit edit-icon"></i>
+    <div class="page-header">
+      <div>
+        <h1>交易记录</h1>
+        <p class="subtitle">内置模拟盘与券商账户（模拟 / 实盘）的委托状态、成交明细与 FIFO 平仓盈亏。</p>
       </div>
-      <div class="strategy-settings">
-        <span class="setting-item">
-          设置: {{ formatDate(strategyInfo.start_date) }} 到 {{ formatDate(strategyInfo.end_date) }}, 
-          ¥{{ formatAmount(strategyInfo.initial_cash || 100000) }}, 每天
-        </span>
-      </div>
-      <div class="strategy-status">
-        <span class="status-item">
-          <i class="fa fa-check-circle status-icon"></i>
-          状态: {{ strategyInfo.status }}, 实际耗时{{ strategyInfo.runtime }} {{ strategyInfo.platform }}
-        </span>
-      </div>
-    </div>
-
-    <!-- 子导航/操作栏 -->
-    <div class="sub-navigation">
-      <div class="nav-tabs">
-        <button class="nav-tab">编辑策略</button>
-        <button class="nav-tab active">回测详情</button>
-        <button class="nav-tab">编译运行列表</button>
-        <button class="nav-tab">回测列表</button>
-      </div>
-      <div class="action-buttons">
-        <button class="action-btn">模拟交易</button>
-        <button class="action-btn">归因分析</button>
-        <button class="action-btn">分享到社区</button>
-        <button class="action-btn">导出</button>
+      <div class="header-actions">
+        <select v-model.number="accountId" @change="switchAccount">
+          <option v-for="item in accounts" :key="item.id" :value="item.id">
+            {{ item.name }}（{{ marketLabel(item.market) }} · {{ item.broker_label }}{{ item.trading_mode === 'LIVE' ? ' · 实盘' : '' }}）
+          </option>
+        </select>
+        <button v-if="selectedAccount?.is_external" class="ghost-btn" :disabled="syncing" @click="syncAndReload">
+          {{ syncing ? '同步中' : '同步券商' }}
+        </button>
+        <button class="ghost-btn" :disabled="loading" @click="loadAll">
+          {{ loading ? '加载中' : '刷新' }}
+        </button>
+        <RouterLink class="ghost-btn" to="/research-terminal">去交易台下单</RouterLink>
       </div>
     </div>
 
-    <!-- 交易详情面板 -->
-    <div class="transaction-panel">
-      <div class="panel-header">
-        <h2>交易详情</h2>
-        <button class="group-btn">Group by day</button>
+    <p v-if="error" class="error-banner">{{ error }}</p>
+    <p v-if="syncError" class="error-banner warn">券商同步失败，以下为最近一次同步的本地数据：{{ syncError }}</p>
+
+    <div v-if="!accounts.length" class="empty-card">
+      还没有账户，先到量化研究交易台创建一个（内置模拟或券商模拟盘）并提交订单。
+    </div>
+
+    <template v-else>
+      <div v-if="selectedAccount" class="account-meta">
+        <span :class="['mode-tag', selectedAccount.trading_mode.toLowerCase()]">{{ selectedAccount.trading_mode === 'LIVE' ? '实盘' : '模拟盘' }}</span>
+        <span>{{ selectedAccount.broker_label }}</span>
+        <span v-if="selectedAccount.broker_account_id">券商账号 {{ selectedAccount.broker_account_id }}</span>
+        <span v-if="selectedAccount.is_external">最近同步 {{ selectedAccount.last_synced_at ? formatTime(selectedAccount.last_synced_at) : '--' }}</span>
+        <span v-else>本地即时撮合，无需同步</span>
       </div>
 
-      <!-- 列显示控制 -->
-      <div class="column-controls">
-        <div class="control-group">
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="visibleColumns.date" />
-            <span>日期</span>
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="visibleColumns.orderTime" />
-            <span>委托时间</span>
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="visibleColumns.target" />
-            <span>标的</span>
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="visibleColumns.transactionType" />
-            <span>交易类型</span>
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="visibleColumns.orderType" />
-            <span>下单类型</span>
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="visibleColumns.quantity" />
-            <span>成交数量</span>
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="visibleColumns.price" />
-            <span>成交价</span>
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="visibleColumns.amount" />
-            <span>成交额</span>
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="visibleColumns.pl" />
-            <span>平仓盈亏</span>
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="visibleColumns.fee" />
-            <span>手续费</span>
-          </label>
+      <div class="summary-grid">
+        <div class="summary-card">
+          <span>成交笔数</span>
+          <strong>{{ summary.trade_count }}</strong>
+          <em>买入 {{ summary.buy_count }} / 卖出 {{ summary.sell_count }}</em>
+        </div>
+        <div class="summary-card">
+          <span>已实现盈亏</span>
+          <strong :class="pnlClass(summary.realized_pnl)">{{ money(summary.realized_pnl) }}</strong>
+          <em>{{ summary.closed_count }} 笔平仓</em>
+        </div>
+        <div class="summary-card">
+          <span>浮动盈亏</span>
+          <strong :class="pnlClass(summary.unrealized_pnl)">{{ money(summary.unrealized_pnl) }}</strong>
+          <em>持仓市值 {{ money(summary.market_value) }}</em>
+        </div>
+        <div class="summary-card">
+          <span>未完成委托</span>
+          <strong>{{ openOrders.length }}</strong>
+          <em>交易费用 {{ money(summary.total_fees) }}</em>
         </div>
       </div>
 
-      <!-- 交易表格 -->
-      <div class="table-container">
-        <table class="transaction-table">
+      <div class="section-heading">
+        <h2>委托记录</h2>
+        <div class="side-filter">
+          <button v-for="option in statusOptions" :key="option.value"
+                  :class="{ active: statusFilter === option.value }"
+                  @click="statusFilter = option.value">{{ option.label }}<em>{{ option.count }}</em></button>
+        </div>
+      </div>
+      <div class="table-card">
+        <table v-if="filteredOrders.length">
           <thead>
             <tr>
-              <th v-if="visibleColumns.date" class="sortable">
-                日期
-                <i class="fa fa-sort sort-icon"></i>
-              </th>
-              <th v-if="visibleColumns.orderTime">委托时间</th>
-              <th v-if="visibleColumns.target">标的</th>
-              <th v-if="visibleColumns.transactionType">交易类型</th>
-              <th v-if="visibleColumns.orderType">下单类型</th>
-              <th v-if="visibleColumns.quantity">成交数量</th>
-              <th v-if="visibleColumns.price">成交价</th>
-              <th v-if="visibleColumns.amount">成交额</th>
-              <th v-if="visibleColumns.pl">平仓盈亏</th>
-              <th v-if="visibleColumns.fee">手续费</th>
+              <th>委托时间</th>
+              <th>标的</th>
+              <th>方向</th>
+              <th>类型</th>
+              <th>委托量</th>
+              <th>已成交</th>
+              <th>委托价</th>
+              <th>成交价</th>
+              <th>状态</th>
+              <th>券商委托号</th>
+              <th>说明</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="transaction in filteredTransactions" :key="transaction.id">
-              <td v-if="visibleColumns.date">{{ transaction.date }}</td>
-              <td v-if="visibleColumns.orderTime">{{ transaction.orderTime }}</td>
-              <td v-if="visibleColumns.target">{{ transaction.target }}</td>
-              <td v-if="visibleColumns.transactionType">
-                <span :class="['transaction-type', transaction.type]">
-                  {{ transaction.transactionType }}
-                </span>
+            <tr v-for="order in filteredOrders" :key="order.id">
+              <td>{{ formatTime(order.created_at) }}</td>
+              <td>{{ order.symbol }}</td>
+              <td><span :class="['side-tag', order.side.toLowerCase()]">{{ order.side === 'BUY' ? '买入' : '卖出' }}</span></td>
+              <td>{{ order.order_type === 'MARKET' ? '市价' : '限价' }}</td>
+              <td>{{ qty(order.quantity) }}</td>
+              <td>{{ qty(order.filled_quantity) }}</td>
+              <td>{{ order.requested_price === null ? '--' : order.requested_price.toFixed(2) }}</td>
+              <td>{{ order.executed_price === null ? '--' : order.executed_price.toFixed(2) }}</td>
+              <td><span :class="['status-tag', order.status.toLowerCase()]">{{ statusLabel(order.status) }}</span></td>
+              <td class="memo">{{ order.broker_order_id || '--' }}</td>
+              <td class="memo">{{ order.message || '--' }}</td>
+              <td>
+                <button v-if="isOpen(order.status)" class="link-btn" :disabled="cancelling === order.id" @click="cancel(order)">
+                  {{ cancelling === order.id ? '撤单中' : '撤单' }}
+                </button>
               </td>
-              <td v-if="visibleColumns.orderType">{{ transaction.orderType }}</td>
-              <td v-if="visibleColumns.quantity">
-                <span :class="{ 'negative': transaction.quantity < 0 }">
-                  {{ transaction.quantity > 0 ? '+' : '' }}{{ transaction.quantity }}股
-                </span>
-              </td>
-              <td v-if="visibleColumns.price">¥{{ formatAmount(transaction.price) }}</td>
-              <td v-if="visibleColumns.amount">
-                <span :class="{ 'negative': transaction.amount < 0 }">
-                  {{ transaction.amount > 0 ? '+' : '' }}¥{{ formatAmount(Math.abs(transaction.amount)) }}
-                </span>
-              </td>
-              <td v-if="visibleColumns.pl">
-                <span :class="{ 'positive': transaction.pl > 0, 'negative': transaction.pl < 0 }">
-                  {{ transaction.pl > 0 ? '+' : '' }}¥{{ formatAmount(Math.abs(transaction.pl)) }}
-                </span>
-              </td>
-              <td v-if="visibleColumns.fee">¥{{ formatAmount(transaction.fee) }}</td>
             </tr>
           </tbody>
         </table>
+        <p v-else class="empty-card">没有符合条件的委托。</p>
       </div>
-    </div>
 
-    <!-- 聊天图标 -->
-    <div class="chat-icon">
-      <i class="fa fa-comments"></i>
-      <span class="notification-badge">1</span>
-    </div>
+      <div class="section-heading">
+        <h2>成交明细</h2>
+        <span class="hint">已成交订单按 FIFO 逐笔配对计算平仓盈亏</span>
+      </div>
+      <div class="filter-bar">
+        <label>标的<input v-model="symbolFilter" placeholder="全部" /></label>
+        <div class="side-filter">
+          <button v-for="option in sideOptions" :key="option.value"
+                  :class="{ active: sideFilter === option.value }"
+                  @click="sideFilter = option.value">{{ option.label }}</button>
+        </div>
+        <span class="filter-count">共 {{ filteredTrades.length }} 条</span>
+      </div>
+
+      <div class="table-card">
+        <table v-if="filteredTrades.length">
+          <thead>
+            <tr>
+              <th>成交时间</th>
+              <th>标的</th>
+              <th>方向</th>
+              <th>下单类型</th>
+              <th>数量</th>
+              <th>成交价</th>
+              <th>成交额</th>
+              <th>手续费</th>
+              <th>平仓盈亏</th>
+              <th>成交来源</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="trade in filteredTrades" :key="trade.id">
+              <td>{{ formatTime(trade.created_at) }}</td>
+              <td>{{ trade.symbol }}</td>
+              <td><span :class="['side-tag', trade.side.toLowerCase()]">{{ trade.side === 'BUY' ? '买入' : '卖出' }}</span></td>
+              <td>{{ trade.order_type === 'MARKET' ? '市价单' : '限价单' }}</td>
+              <td>{{ trade.side === 'BUY' ? '+' : '-' }}{{ qty(trade.quantity) }}</td>
+              <td>{{ money(trade.executed_price) }}</td>
+              <td>{{ money(trade.amount) }}</td>
+              <td>{{ money(trade.fee) }}</td>
+              <td :class="pnlClass(trade.realized_pnl)">
+                {{ trade.realized_pnl === null ? '--' : money(trade.realized_pnl) }}
+              </td>
+              <td class="memo">{{ trade.message || '--' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="empty-card">该账户还没有成交记录。</p>
+      </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
+import { paperTradingApi } from '@/api/stock'
 
-interface Transaction {
-  id: number
-  date: string
-  orderTime: string
-  target: string
-  transactionType: string
-  type: string
-  orderType: string
-  quantity: number
-  price: number
-  amount: number
-  pl: number
-  fee: number
+type Market = 'A' | 'US' | 'CRYPTO'
+interface PaperAccount {
+  id: number; name: string; market: Market; currency: string
+  broker: string; broker_label: string; broker_account_id: string
+  trading_mode: 'PAPER' | 'LIVE'; is_external: boolean; last_synced_at: string | null
+}
+interface PaperOrder {
+  id: number; symbol: string; side: 'BUY' | 'SELL'; order_type: 'MARKET' | 'LIMIT'
+  quantity: number | string; filled_quantity: number
+  requested_price: number | null; executed_price: number | null
+  status: string; broker_order_id: string; message: string; created_at: string
 }
 
-interface StrategyInfo {
-  name: string
-  start_date: string
-  end_date: string
-  initial_cash: number
-  status: string
-  runtime: string
-  platform: string
+const OPEN_STATUSES = ['PENDING', 'SUBMITTED', 'PARTIAL']
+const STATUS_LABELS: Record<string, string> = {
+  PENDING: '待成交', SUBMITTED: '已报', PARTIAL: '部分成交', FILLED: '已成交', CANCELLED: '已撤销', REJECTED: '已拒绝',
 }
 
-// 列显示控制
-const visibleColumns = ref({
-  date: true,
-  orderTime: true,
-  target: true,
-  transactionType: true,
-  orderType: true,
-  quantity: true,
-  price: true,
-  amount: true,
-  pl: true,
-  fee: true
+const accounts = ref<PaperAccount[]>([])
+const accountId = ref<number>()
+const currency = ref('CNY')
+const summary = ref<any>({
+  trade_count: 0, buy_count: 0, sell_count: 0, closed_count: 0,
+  realized_pnl: 0, unrealized_pnl: 0, market_value: 0, total_fees: 0,
 })
-
-// 交易数据和策略信息
-const transactions = ref<Transaction[]>([])
-const strategyInfo = ref<StrategyInfo>({
-  name: '加载中...',
-  start_date: '',
-  end_date: '',
-  initial_cash: 0,
-  status: '加载中',
-  runtime: '',
-  platform: ''
-})
-const loading = ref(true)
+const trades = ref<any[]>([])
+const orders = ref<PaperOrder[]>([])
+const loading = ref(false)
+const syncing = ref(false)
+const cancelling = ref<number>()
 const error = ref('')
+const syncError = ref('')
+const symbolFilter = ref('')
+const sideFilter = ref('ALL')
+const statusFilter = ref('ALL')
+const sideOptions = [
+  { value: 'ALL', label: '全部' },
+  { value: 'BUY', label: '买入' },
+  { value: 'SELL', label: '卖出' },
+]
 
-// 从缓存数据或localStorage获取交易详情数据
-const fetchTransactionDetails = async () => {
+const selectedAccount = computed(() => accounts.value.find((item) => item.id === accountId.value))
+const openOrders = computed(() => orders.value.filter((order) => isOpen(order.status)))
+const statusOptions = computed(() => [
+  { value: 'ALL', label: '全部', count: orders.value.length },
+  { value: 'OPEN', label: '未完成', count: openOrders.value.length },
+  { value: 'FILLED', label: '已成交', count: orders.value.filter((order) => order.status === 'FILLED').length },
+  { value: 'CANCELLED', label: '已撤销', count: orders.value.filter((order) => order.status === 'CANCELLED').length },
+  { value: 'REJECTED', label: '已拒绝', count: orders.value.filter((order) => order.status === 'REJECTED').length },
+])
+const filteredOrders = computed(() => orders.value.filter((order) => {
+  if (statusFilter.value === 'ALL') return true
+  if (statusFilter.value === 'OPEN') return isOpen(order.status)
+  return order.status === statusFilter.value
+}))
+const filteredTrades = computed(() => trades.value.filter((trade) => {
+  const symbolMatched = !symbolFilter.value || trade.symbol.includes(symbolFilter.value.trim().toUpperCase())
+  return symbolMatched && (sideFilter.value === 'ALL' || trade.side === sideFilter.value)
+}))
+
+function isOpen(status: string) {
+  return OPEN_STATUSES.includes(status)
+}
+function statusLabel(status: string) {
+  return STATUS_LABELS[status] ?? status
+}
+function marketLabel(market: Market) {
+  return market === 'A' ? 'A股' : market === 'US' ? '美股' : '虚拟货币'
+}
+function qty(value: number | string) {
+  return Number(value).toString()
+}
+function money(value: number | null) {
+  if (value === null || value === undefined) return '--'
+  return `${value.toFixed(2)} ${currency.value}`
+}
+function pnlClass(value: number | null) {
+  if (!value) return ''
+  return value > 0 ? 'positive' : 'negative'
+}
+function formatTime(value: string) {
+  return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
+function showError(value: any, fallback: string) {
+  error.value = value?.response?.data?.error || fallback
+}
+
+async function loadAccounts(keepId?: number) {
+  accounts.value = (await paperTradingApi.getAccounts()).data.data
+  accountId.value = accounts.value.find((item) => item.id === keepId)?.id ?? accounts.value[0]?.id
+}
+async function loadAll() {
+  if (!accountId.value) return
+  loading.value = true
+  error.value = ''
   try {
-    loading.value = true
-    
-    // 首先尝试从缓存API获取最新的回测结果
-    try {
-      console.log('📡 从缓存API获取交易详情数据')
-      const response = await fetch('http://localhost:8002/api/cache/transaction-details/')
-      
-      if (response.ok) {
-        const data = await response.json()
-        
-        if (data.status === 'success' && data.backtest_result && data.backtest_result.trades) {
-          console.log('📊 使用缓存API数据')
-          const backtestData = data.backtest_result
-          
-          // 将后端交易数据格式转换为前端显示格式
-          const transformedTrades = backtestData.trades.map((trade: any, index: number) => ({
-            id: index + 1,
-            date: trade.date || trade.trade_time?.split('T')[0]?.replace(/-/g, '') || '20240101',
-            orderTime: trade.trade_time?.split('T')[1]?.slice(0, 8) || '09:30:00',
-            target: trade.stock_code || trade.symbol || '未知',
-            transactionType: trade.action === 'buy' ? '买入' : '卖出',
-            type: trade.action, // 添加类型用于样式
-            orderType: '市价单',
-            quantity: trade.shares || 0,
-            price: Number(trade.price || 0),
-            amount: Number(trade.amount || (trade.shares * trade.price)),
-            pl: 0, // 盈亏需要计算
-            fee: Number((trade.amount || (trade.shares * trade.price)) * 0.001) // 简化手续费计算
-          }))
-          
-          transactions.value = transformedTrades
-          
-          // 设置策略信息 - 使用缓存数据中的实际执行时间和日期
-          const timeRange = data.backtest_result?.time_period || data.data?.time_period || {}
-          const strategyData = data.backtest_result?.strategy_info || backtestData
-          
-          console.log('🔍 调试数据结构:')
-          console.log('  - data.backtest_result:', data.backtest_result ? '存在' : '不存在')
-          console.log('  - data.data:', data.data ? '存在' : '不存在')
-          console.log('  - timeRange:', timeRange)
-          console.log('  - strategyData:', strategyData)
-          
-          strategyInfo.value = {
-            name: strategyData.strategy_name || strategyData.name || '实时回测策略',
-            start_date: timeRange.start_date || strategyData.start_date || '20230101',
-            end_date: timeRange.end_date || strategyData.end_date || '20231231',
-            initial_cash: strategyData.initial_cash || strategyData.total_cash || strategyData.initial_capital || 100000,
-            status: '回测完成',
-            runtime: data.execution_time || strategyData.execution_time || strategyData.runtime || '00分03秒',
-            platform: 'Python3'
-          }
-          
-          console.log('✅ 从缓存API加载交易数据成功:', transformedTrades.length, '条记录')
-          console.log('⏱️ 实际执行时间:', data.execution_time)
-          console.log('📅 日期范围:', strategyInfo.value.start_date, '到', strategyInfo.value.end_date)
-          console.log('📊 完整策略信息:', strategyInfo.value)
-          return
-        }
-      }
-    } catch (apiError) {
-      console.log('📦 缓存API未可用，尝试localStorage')
-    }
-    
-    // 回退到localStorage数据
-    const savedResults = localStorage.getItem('backtestResults')
-    if (savedResults) {
-      console.log('� 从localStorage加载回测交易数据')
-      const backtestData = JSON.parse(savedResults)
-      
-      // 如果有交易数据，使用localStorage中的数据
-      if (backtestData.trades && backtestData.trades.length > 0) {
-        // 将后端交易数据格式转换为前端显示格式
-        const transformedTrades = backtestData.trades.map((trade: any, index: number) => ({
-          id: index + 1,
-          date: trade.date || trade.trade_time?.split('T')[0]?.replace(/-/g, '') || '20240101',
-          orderTime: trade.trade_time?.split('T')[1]?.slice(0, 8) || '09:30:00',
-          target: trade.stock_code || trade.symbol || '未知',
-          transactionType: trade.action === 'buy' ? '买入' : '卖出',
-          type: trade.action, // 添加类型用于样式
-          orderType: '市价单',
-          quantity: trade.shares || 0,
-          price: Number(trade.price || 0),
-          amount: Number(trade.amount || (trade.shares * trade.price)),
-          pl: 0, // 盈亏需要计算
-          fee: Number((trade.amount || (trade.shares * trade.price)) * 0.001) // 简化手续费计算
-        }))
-        
-        transactions.value = transformedTrades
-        
-        // 设置策略信息
-        strategyInfo.value = {
-          name: backtestData.strategyInfo?.strategy_name || '实时回测策略',
-          start_date: backtestData.strategyInfo?.start_date || backtestData.startDate || '',
-          end_date: backtestData.strategyInfo?.end_date || backtestData.endDate || '',
-          initial_cash: backtestData.strategyInfo?.total_cash || backtestData.initialCapital || 100000,
-          status: '回测完成',
-          runtime: backtestData.executionTime || '00分03秒',
-          platform: 'Python3'
-        }
-        
-        console.log('✅ 从localStorage加载交易数据成功:', transformedTrades.length, '条记录')
-        return
-      }
-    }
-    
-    // 如果都没有数据，显示空状态
-    console.log('⚠️ 没有找到交易数据')
-    transactions.value = []
-    strategyInfo.value = {
-      name: '实时回测策略',
-      start_date: '',
-      end_date: '',
-      initial_cash: 100000,
-      status: '无数据',
-      runtime: '00分00秒',
-      platform: 'Python3'
-    }
-    
-  } catch (err: any) {
-    console.error('❌ 获取交易详情失败:', err)
-    error.value = `获取交易详情失败: ${err?.message || '未知错误'}`
-    // 使用默认数据作为后备
-    transactions.value = []
+    const [analytics, orderList] = await Promise.all([
+      paperTradingApi.getAnalytics(accountId.value),
+      paperTradingApi.getOrders(accountId.value),
+    ])
+    const data = analytics.data.data
+    currency.value = data.account.currency
+    summary.value = data.summary
+    trades.value = data.trades
+    orders.value = orderList.data.data
+  } catch (value: any) {
+    showError(value, '交易记录加载失败')
   } finally {
     loading.value = false
   }
 }
-
-// 过滤显示的交易数据
-const filteredTransactions = computed(() => {
-  return transactions.value
-})
-
-// 格式化日期显示
-const formatDate = (dateStr: string) => {
-  if (!dateStr) return ''
-  // 将 YYYYMMDD 格式转换为 YYYY-MM-DD
-  if (dateStr.length === 8) {
-    return `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`
+async function syncAndReload() {
+  if (!accountId.value) return
+  syncing.value = true
+  syncError.value = ''
+  try {
+    await paperTradingApi.syncAccount(accountId.value)
+    await loadAccounts(accountId.value)
+  } catch (value: any) {
+    syncError.value = value?.response?.data?.error || value?.message || '同步失败'
+  } finally {
+    syncing.value = false
   }
-  return dateStr
+  await loadAll()
+}
+async function switchAccount() {
+  syncError.value = ''
+  if (selectedAccount.value?.is_external) await syncAndReload()
+  else await loadAll()
+}
+async function cancel(order: PaperOrder) {
+  cancelling.value = order.id
+  error.value = ''
+  try {
+    await paperTradingApi.cancelOrder(order.id)
+    await loadAll()
+  } catch (value: any) {
+    showError(value, '撤单失败')
+  } finally {
+    cancelling.value = undefined
+  }
 }
 
-// 格式化金额，保留2位小数并添加千分符
-const formatAmount = (amount: number) => {
-  return Number(amount).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-}
-
-// 组件挂载时获取数据
-onMounted(() => {
-  fetchTransactionDetails()
+onMounted(async () => {
+  try {
+    await loadAccounts()
+    await switchAccount()
+  } catch (value: any) {
+    showError(value, '账户加载失败')
+  }
 })
 </script>
 
 <style scoped>
 .transaction-details {
-  padding: 20px;
-  background-color: #f5f5f5;
+  padding: 24px;
   min-height: 100vh;
+  background: #f5f6f7;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: #1f2a28;
 }
 
-/* 策略头部区域 */
-.strategy-header {
-  background: white;
-  border-radius: 8px;
-  padding: 20px;
-  margin-bottom: 20px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.strategy-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.strategy-title h1 {
-  font-size: 20px;
-  font-weight: 600;
-  color: #333;
-  margin: 0;
-}
-
-.edit-icon {
-  color: #666;
-  cursor: pointer;
-  font-size: 16px;
-  transition: color 0.2s;
-}
-
-.edit-icon:hover {
-  color: #1890ff;
-}
-
-.strategy-settings {
-  margin-bottom: 8px;
-}
-
-.setting-item {
-  color: #666;
-  font-size: 14px;
-}
-
-.strategy-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.status-item {
-  color: #52c41a;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.status-icon {
-  color: #52c41a;
-  font-size: 16px;
-}
-
-/* 子导航/操作栏 */
-.sub-navigation {
-  background: white;
-  border-radius: 8px;
-  padding: 16px 20px;
-  margin-bottom: 20px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+.page-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #dfe5e4;
 }
 
-.nav-tabs {
-  display: flex;
-  gap: 4px;
+.page-header h1 { margin: 0; font-size: 24px; font-weight: 600; }
+.subtitle { margin: 6px 0 0; font-size: 13px; color: #6a7a76; }
+.header-actions { display: flex; align-items: center; gap: 10px; }
+
+.header-actions select,
+.filter-bar input {
+  padding: 9px 12px;
+  border: 1px solid #c4cecc;
+  background: #fff;
+  font: inherit;
 }
 
-.nav-tab {
-  padding: 8px 16px;
-  border: 1px solid #d9d9d9;
-  background: white;
-  border-radius: 4px;
+.ghost-btn {
+  padding: 9px 16px;
+  border: 1px solid #123c35;
+  background: #fff;
+  color: #123c35;
   cursor: pointer;
-  font-size: 14px;
-  transition: all 0.2s;
+  text-decoration: none;
+  font: inherit;
 }
 
-.nav-tab:hover {
-  border-color: #1890ff;
-  color: #1890ff;
+.ghost-btn:disabled { opacity: .55; cursor: not-allowed; }
+
+.error-banner {
+  margin: 16px 0 0;
+  padding: 10px 14px;
+  background: #fff0ed;
+  border-left: 3px solid #b42318;
 }
 
-.nav-tab.active {
-  background: #1890ff;
-  color: white;
-  border-color: #1890ff;
-}
+.error-banner.warn { background: #fff7e6; border-left-color: #9a6b00; }
 
-.action-buttons {
-  display: flex;
-  gap: 8px;
-}
-
-.action-btn {
-  padding: 6px 12px;
-  border: 1px solid #d9d9d9;
-  background: white;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-  transition: all 0.2s;
-}
-
-.action-btn:hover {
-  border-color: #1890ff;
-  color: #1890ff;
-}
-
-/* 交易详情面板 */
-.transaction-panel {
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  overflow: hidden;
-}
-
-.panel-header {
-  padding: 16px 20px;
-  border-bottom: 1px solid #f0f0f0;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.panel-header h2 {
-  font-size: 16px;
-  font-weight: 600;
-  color: #333;
-  margin: 0;
-}
-
-.group-btn {
-  padding: 4px 12px;
-  border: 1px solid #d9d9d9;
-  background: white;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-  transition: all 0.2s;
-}
-
-.group-btn:hover {
-  border-color: #1890ff;
-  color: #1890ff;
-}
-
-/* 列显示控制 */
-.column-controls {
-  padding: 16px 20px;
-  border-bottom: 1px solid #f0f0f0;
-  background: #fafafa;
-}
-
-.control-group {
+.account-meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: #6a7a76;
+}
+
+.mode-tag { padding: 2px 8px; font-size: 12px; background: #e7f5f1; color: #087a65; }
+.mode-tag.live { background: #fdeceb; color: #b42318; }
+
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 26px;
+}
+
+.section-heading h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.section-heading .hint { font-size: 12px; color: #8a9793; }
+
+.status-tag { padding: 2px 8px; font-size: 12px; background: #eef1f0; color: #4a5a56; }
+.status-tag.filled { background: #e7f5f1; color: #087a65; }
+.status-tag.rejected { background: #fdeceb; color: #b42318; }
+.status-tag.pending, .status-tag.submitted, .status-tag.partial { background: #fff7e6; color: #9a6b00; }
+.status-tag.cancelled { background: #eef1f0; color: #71807c; }
+
+.link-btn {
+  border: 0;
+  background: none;
+  color: #b42318;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+.link-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: 16px;
+  margin-top: 20px;
 }
 
-.checkbox-label {
+.summary-card { background: #fff; border: 1px solid #e2e7e6; padding: 18px; }
+.summary-card span { display: block; font-size: 12px; color: #71807c; }
+.summary-card strong { display: block; margin: 8px 0 4px; font-size: 22px; }
+.summary-card em { font-style: normal; font-size: 12px; color: #8a9793; }
+
+.filter-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 14px;
+  margin-top: 20px;
   font-size: 12px;
-  color: #666;
+  color: #6a7a76;
+}
+
+.side-filter { display: flex; border: 1px solid #c4cecc; }
+
+.side-filter button {
+  border: 0;
+  background: #fff;
+  padding: 9px 18px;
   cursor: pointer;
+  font: inherit;
 }
 
-.checkbox-label input[type="checkbox"] {
-  margin: 0;
-}
+.side-filter .active { background: #123c35; color: #fff; }
+.side-filter button em { margin-left: 6px; font-style: normal; font-size: 11px; opacity: .7; }
+.filter-count { margin-left: auto; }
 
-/* 表格容器 */
-.table-container {
+.table-card {
+  margin-top: 12px;
+  background: #fff;
+  border: 1px solid #e2e7e6;
+  padding: 8px 18px 18px;
   overflow-x: auto;
-  max-height: 600px;
-  overflow-y: auto;
 }
 
-.transaction-table {
-  width: 100%;
-  border-collapse: collapse;
+table { width: 100%; border-collapse: collapse; }
+
+th, td {
+  padding: 11px;
+  text-align: right;
+  border-bottom: 1px solid #eef1f0;
   font-size: 13px;
+  white-space: nowrap;
 }
 
-.transaction-table th {
-  background: #fafafa;
-  padding: 12px 8px;
-  text-align: left;
-  font-weight: 600;
-  color: #333;
-  border-bottom: 1px solid #f0f0f0;
-  position: sticky;
-  top: 0;
-  z-index: 10;
+th { color: #71807c; font-weight: 500; }
+th:first-child, td:first-child, th:last-child, td:last-child { text-align: left; }
+
+.side-tag { padding: 2px 8px; font-size: 12px; }
+.side-tag.buy { background: #fdeceb; color: #b42318; }
+.side-tag.sell { background: #e7f5f1; color: #087a65; }
+
+.positive { color: #b42318; }
+.negative { color: #087a65; }
+.memo { font-size: 12px; color: #6a7a76; white-space: normal; max-width: 260px; }
+
+.empty-card {
+  margin-top: 20px;
+  padding: 26px;
+  background: #fff;
+  border: 1px solid #e2e7e6;
+  color: #8a9793;
+  text-align: center;
 }
 
-.transaction-table td {
-  padding: 12px 8px;
-  border-bottom: 1px solid #f0f0f0;
-  color: #333;
+@media (max-width: 900px) {
+  .summary-grid { grid-template-columns: repeat(2, 1fr); }
 }
-
-.transaction-table tbody tr:hover {
-  background: #f5f5f5;
-}
-
-.sortable {
-  cursor: pointer;
-  user-select: none;
-}
-
-.sort-icon {
-  margin-left: 4px;
-  color: #999;
-  font-size: 12px;
-}
-
-.transaction-type {
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.transaction-type.buy {
-  background: #f6ffed;
-  color: #52c41a;
-  border: 1px solid #b7eb8f;
-}
-
-.transaction-type.sell {
-  background: #fff2e8;
-  color: #fa541c;
-  border: 1px solid #ffbb96;
-}
-
-.positive {
-  color: #52c41a;
-}
-
-.negative {
-  color: #ff4d4f;
-}
-
-/* 聊天图标 */
-.chat-icon {
-  position: fixed;
-  bottom: 30px;
-  right: 30px;
-  width: 50px;
-  height: 50px;
-  background: #1890ff;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(24, 144, 255, 0.3);
-  transition: all 0.3s ease;
-  z-index: 1000;
-}
-
-.chat-icon:hover {
-  background: #40a9ff;
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(24, 144, 255, 0.4);
-}
-
-.chat-icon i {
-  font-size: 20px;
-}
-
-.notification-badge {
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  background: #ff4d4f;
-  color: white;
-  border-radius: 50%;
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 600;
-}
-
-/* 响应式设计 */
-@media (max-width: 768px) {
-  .transaction-details {
-    padding: 10px;
-  }
-  
-  .sub-navigation {
-    flex-direction: column;
-    gap: 12px;
-    align-items: flex-start;
-  }
-  
-  .nav-tabs {
-    flex-wrap: wrap;
-  }
-  
-  .action-buttons {
-    flex-wrap: wrap;
-  }
-  
-  .control-group {
-    gap: 12px;
-  }
-  
-  .transaction-table {
-    font-size: 12px;
-  }
-  
-  .transaction-table th,
-  .transaction-table td {
-    padding: 8px 6px;
-  }
-}
-</style> 
+</style>
