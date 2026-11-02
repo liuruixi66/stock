@@ -9,9 +9,6 @@
 | [quant_research.py](quant_research.py) | 通用量化实验：差分递归预测、组合基准、SMA 均线回测 | 想改普通策略或组合回测公式 |
 | [fractional_forecast.py](fractional_forecast.py) | 分数阶差分核心、特征、时间区间配置、股票池和多空模拟 | 想改分数差分数学处理、预测数据或模拟规则 |
 | [fractional_lstm.py](fractional_lstm.py) | 组装 LSTM 序列、训练、验证选型、测试期预测 | 想改模型结构或训练/验证/测试流程 |
-| [portfolio_lstm.py](portfolio_lstm.py) | 共享组合 LSTM、因果特征、组合代理目标、版本化模型包和批量推理 | 想训练/加载共享模型或生成组合研究分数 |
-| [portfolio_tuning.py](portfolio_tuning.py) | 固定行业池的组合搜索面板、成本回测及 Optuna 选型 | 想启动或审阅组合级正式搜索 |
-| [portfolio_finalization.py](portfolio_finalization.py) | 用验证选定配置做最终共享重训、历史重评和 CPU 模型包校验 | 想生成最终模型包及历史验收结果 |
 | [database_fractional.py](database_fractional.py) | 从 `stocks.db` 读取并筛选分数差分实验所需股票和行情 | 想改数据库样本、股票池或历史数据筛选 |
 | [fractional_execution.py](fractional_execution.py) | 对已保存预测做有限交易约束和费用敏感性模拟 | 想检查佣金、整手、现金或执行约束的影响 |
 | [fractional_results.py](fractional_results.py) | 将实验结果字段和说明翻译成中文 | 想改结果展示文案，不改模型计算 |
@@ -24,7 +21,6 @@
 
 - `quant_research.py` 与 `fractional_forecast.py`：前者放通用策略实验；后者服务于分数阶差分实验，还包含该实验的配置、股票池和模拟器。
 - `fractional_forecast.py` 与 `fractional_lstm.py`：前者处理差分、特征及预测/回测数据；后者负责把这些数据送入 LSTM 训练和预测。
-- `fractional_lstm.py` 与 `portfolio_lstm.py`：前者保留逐股 MAE 实验；后者是独立的共享组合模型，不可混用其指标、权重或价格协议。
 - `database_fractional.py` 与 `fractional_execution.py`：前者准备实验输入数据；后者对预测结果做交易费用和执行限制模拟。
 - `analytics.py` 与 `advanced_metrics.py`：前者分析本项目模拟账户的订单与 FIFO 盈亏；后者是接收通用交易记录的回测指标工具。
 
