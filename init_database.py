@@ -10,9 +10,9 @@ from pathlib import Path
 
 # 添加Django项目路径
 BASE_DIR = Path(__file__).resolve().parent
-sys.path.append(str(BASE_DIR / 'backend' / 'myproject'))
+sys.path.append(str(BASE_DIR / 'backend'))
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
 from django.core.management import execute_from_command_line
@@ -50,7 +50,7 @@ def run_migrations():
         print("执行数据库迁移...")
         
         # 切换到Django项目目录
-        os.chdir(BASE_DIR / 'backend' / 'myproject')
+        os.chdir(BASE_DIR / 'backend')
         
         # 创建迁移文件
         execute_from_command_line(['manage.py', 'makemigrations'])

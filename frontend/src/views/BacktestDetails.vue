@@ -155,8 +155,8 @@
               <span class="param-value">{{ backtestData.initialCapital || 100000 }}</span>
             </div>
             <div class="param-item">
-              <span class="param-label">筛选股票数</span>
-              <span class="param-value">{{ backtestResults.stockCount || 0 }}</span>
+              <span class="param-label">自选股数量</span>
+              <span class="param-value">{{ watchlist.length }}</span>
             </div>
             <div class="param-item">
               <span class="param-label">回测频率</span>
@@ -166,16 +166,28 @@
         </div>
         
         <div class="param-section">
-          <h3>筛选股票</h3>
+          <h3>自选股票</h3>
+          <div class="watchlist-form">
+            <select v-model="watchForm.market">
+              <option value="A">A股</option>
+              <option value="US">美股</option>
+              <option value="CRYPTO">虚拟货币</option>
+            </select>
+            <input v-model="watchForm.symbol" placeholder="代码，如 600519 / AAPL" @keyup.enter="addWatch" />
+            <input v-model="watchForm.name" placeholder="名称（选填）" />
+            <button class="watch-add" :disabled="watchLoading" @click="addWatch">加入自选</button>
+          </div>
+          <p v-if="watchError" class="watch-error">{{ watchError }}</p>
           <div class="filtered-stocks">
-            <div v-if="backtestResults.filteredStocks.length > 0" class="stock-list">
-              <div v-for="(stock, index) in backtestResults.filteredStocks" :key="index" class="stock-item">
-                <span class="stock-symbol">{{ (stock as any).code || (stock as any).symbol || '未知代码' }}</span>
-                <span class="stock-name">{{ (stock as any).name || '未知' }}</span>
+            <div v-if="watchlist.length > 0" class="stock-list">
+              <div v-for="item in watchlist" :key="item.id" class="stock-item">
+                <span class="stock-symbol">{{ item.symbol }}</span>
+                <span class="stock-name">{{ item.name || item.market }}</span>
+                <button class="watch-remove" title="移除" @click="removeWatch(item.id)">×</button>
               </div>
             </div>
             <div v-else class="no-stocks">
-              暂无筛选股票数据
+              暂无自选股票，添加后可在量化研究交易台直接调用
             </div>
           </div>
         </div>
@@ -185,11 +197,55 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import NavigationCards from '@/components/NavigationCards.vue'
+import { watchlistApi } from '@/api/stock'
 
 const route = useRoute()
+
+interface WatchItem { id: number; market: 'A' | 'US' | 'CRYPTO'; symbol: string; name: string; note: string }
+
+const watchlist = ref<WatchItem[]>([])
+const watchForm = reactive<{ market: 'A' | 'US' | 'CRYPTO'; symbol: string; name: string }>({ market: 'A', symbol: '', name: '' })
+const watchLoading = ref(false)
+const watchError = ref('')
+
+const loadWatchlist = async () => {
+  try {
+    watchlist.value = (await watchlistApi.list()).data.data
+  } catch (error: any) {
+    watchError.value = error?.response?.data?.error || '自选股加载失败'
+  }
+}
+
+const addWatch = async () => {
+  if (!watchForm.symbol.trim()) {
+    watchError.value = '请填写股票代码'
+    return
+  }
+  watchLoading.value = true
+  watchError.value = ''
+  try {
+    await watchlistApi.add({ market: watchForm.market, symbol: watchForm.symbol.trim(), name: watchForm.name.trim() })
+    watchForm.symbol = ''
+    watchForm.name = ''
+    await loadWatchlist()
+  } catch (error: any) {
+    watchError.value = error?.response?.data?.error || '添加自选股失败'
+  } finally {
+    watchLoading.value = false
+  }
+}
+
+const removeWatch = async (itemId: number) => {
+  try {
+    await watchlistApi.remove(itemId)
+    await loadWatchlist()
+  } catch (error: any) {
+    watchError.value = error?.response?.data?.error || '移除自选股失败'
+  }
+}
 
 // 回到顶部功能
 const scrollToTop = () => {
@@ -226,8 +282,6 @@ const backtestData = ref({
 
 // 回测结果数据
 const backtestResults = ref<any>({
-  filteredStocks: [],
-  stockCount: 0,
   accountSummary: {},
   performance: {},
   trades: [],
@@ -407,15 +461,6 @@ const startNewBacktest = async (params: any) => {
       const performanceData = result.data.performance_metrics || {}
       
       backtestResults.value = {
-        filteredStocks: result.data.trades?.map((trade: any) => ({
-          symbol: trade.stock_code,
-          name: trade.stock_code,
-          action: trade.action,
-          price: trade.price,
-          amount: trade.amount,
-          date: trade.date
-        })) || [],
-        stockCount: result.data.trades?.length || 0,
         accountSummary: {
           total_return: performanceData.strategy_return || 0,
           annual_return: performanceData.strategy_annual_return || 0,
@@ -463,11 +508,6 @@ const startNewBacktest = async (params: any) => {
     
     // 使用默认的模拟数据
     backtestResults.value = {
-      filteredStocks: [
-        { symbol: '000001', name: '平安银行', action: 'buy', price: 10.5, amount: 10500, date: '2024-01-01' },
-        { symbol: '000002', name: '万科A', action: 'buy', price: 15.2, amount: 15200, date: '2024-01-02' }
-      ],
-      stockCount: 2,
       accountSummary: {
         total_return: 15.5,
         annual_return: 15.5,
@@ -502,6 +542,7 @@ const handleScroll = () => {
 // 在组件挂载时加载回测结果
 onMounted(() => {
   loadBacktestResults();
+  loadWatchlist();
 })
 
 onUnmounted(() => {
@@ -1000,6 +1041,55 @@ onUnmounted(() => {
 }
 
 /* 股票列表样式 */
+.watchlist-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.watchlist-form select,
+.watchlist-form input {
+  padding: 8px 10px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.watchlist-form input {
+  flex: 1;
+  min-width: 140px;
+}
+
+.watch-add {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #1890ff;
+  color: #fff;
+  cursor: pointer;
+}
+
+.watch-add:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.watch-remove {
+  border: none;
+  background: transparent;
+  color: #b42318;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.watch-error {
+  margin: 8px 0 0;
+  color: #b42318;
+  font-size: 12px;
+}
+
 .filtered-stocks {
   margin-top: 12px;
 }
