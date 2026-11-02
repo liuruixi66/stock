@@ -1,6 +1,7 @@
 """Frozen current industry leaders; explicitly not a point-in-time universe."""
 
 from collections import Counter, defaultdict
+from copy import deepcopy
 from datetime import date
 import hashlib
 import json
@@ -188,6 +189,57 @@ def select_industry_leaders(
     logger.info('Market-cap date %s: selected %d stocks in %d industries; exclusions=%s',
                 day, len(selected), len(industries), counts)
     return report
+
+
+def exclude_universe_instruments(universe: dict, exclusions: dict[str, str]) -> dict:
+    """Create a signed child universe with explicit removals and no backfilling."""
+    verify_industry_universe(universe)
+    if not isinstance(exclusions, dict) or not exclusions:
+        raise ValueError('At least one explicit instrument exclusion is required')
+    if any(not isinstance(symbol, str) or not isinstance(reason, str) or not reason.strip()
+           for symbol, reason in exclusions.items()):
+        raise ValueError('Exclusions must map instrument codes to nonempty reasons')
+    selected = set(universe['selected_instruments'])
+    unknown = set(exclusions) - selected
+    if unknown:
+        raise ValueError(f'Cannot exclude instruments outside the universe: {sorted(unknown)}')
+
+    result = deepcopy(universe)
+    result.pop('signature')
+    result['parent_signature'] = universe['signature']
+    result['exclusion_policy'] = 'explicit_user_exclusions_without_industry_backfill'
+    result['excluded_by_user'] = [
+        {'instrument': symbol, 'reason': exclusions[symbol]}
+        for symbol in sorted(exclusions)
+    ]
+    for industry, stocks in result['industries'].items():
+        retained = [row for row in stocks if row['instrument'] not in exclusions]
+        result['industries'][industry] = [
+            {**row, 'industry_rank': rank}
+            for rank, row in enumerate(retained, 1)
+        ]
+    result['industries'] = {
+        industry: stocks for industry, stocks in result['industries'].items() if stocks
+    }
+    result['selected_instruments'] = sorted(selected - set(exclusions))
+    result['stock_count'] = len(result['selected_instruments'])
+    result['industry_count'] = len(result['industries'])
+    result['undersized_industries'] = {
+        industry: len(stocks) for industry, stocks in result['industries'].items()
+        if len(stocks) < result['per_industry']
+    }
+    result['excluded'].extend(result['excluded_by_user'])
+    result['excluded'].sort(key=lambda row: (row['instrument'], row['reason']))
+    counts = Counter(result['excluded_counts'])
+    counts.update(row['reason'] for row in result['excluded_by_user'])
+    result['excluded_counts'] = dict(sorted(counts.items()))
+    result['limitations'] = [
+        *result['limitations'],
+        'Explicitly excluded securities are not replaced by lower-ranked industry members.',
+    ]
+    result['signature'] = _digest(result)
+    verify_industry_universe(result)
+    return result
 
 
 def verify_industry_universe(report: dict) -> None:

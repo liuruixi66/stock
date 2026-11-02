@@ -8,7 +8,9 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
-from market_data.industry_universe import select_industry_leaders, verify_industry_universe
+from market_data.industry_universe import (
+    exclude_universe_instruments, select_industry_leaders, verify_industry_universe,
+)
 
 
 class IndustryUniverseTests(TestCase):
@@ -121,6 +123,27 @@ class IndustryUniverseTests(TestCase):
         with closing(sqlite3.connect(self.path)) as conn, conn:
             conn.execute('UPDATE ts_daily_basic SET total_mv=100')
         self.assertEqual(self.select()['industries']['Banks'][-1]['instrument'], '600004.SH')
+
+    def test_explicit_exclusions_are_signed_and_not_backfilled(self):
+        source = self.select()
+        result = exclude_universe_instruments(
+            source, {'600000.SH': 'user_excluded_historical_data_gaps'},
+        )
+        self.assertEqual(result['stock_count'], 5)
+        self.assertNotIn('600000.SH', result['selected_instruments'])
+        self.assertEqual(
+            [row['instrument'] for row in result['industries']['Banks']],
+            ['600001.SH', '600002.SH', '600003.SH', '600004.SH'],
+        )
+        self.assertEqual(
+            result['excluded_counts']['user_excluded_historical_data_gaps'], 1,
+        )
+        self.assertEqual(result['parent_signature'], source['signature'])
+        self.assertEqual(result['exclusion_policy'],
+                         'explicit_user_exclusions_without_industry_backfill')
+        verify_industry_universe(result)
+        with self.assertRaisesRegex(ValueError, 'outside the universe'):
+            exclude_universe_instruments(source, {'999999.SH': 'not selected'})
 
     def test_nonfinite_cap_is_excluded_with_serializable_audit(self):
         self.add_stock('600009.SH', cap=float('inf'))

@@ -8,7 +8,9 @@ import logging
 from pathlib import Path
 
 from config.settings import STOCKS_DATABASE_PATH
-from market_data.industry_universe import select_industry_leaders, verify_industry_universe
+from market_data.industry_universe import (
+    exclude_universe_instruments, select_industry_leaders, verify_industry_universe,
+)
 from research.experiment_runs import tracked_run
 from research.fractional_tuning import atomic_json
 
@@ -20,6 +22,10 @@ def main():
                         help='One completed trading date; default: latest date in daily_basic')
     parser.add_argument('--per-industry', type=int, default=5)
     parser.add_argument('--output', type=Path, help='Default: a new numbered universe run')
+    parser.add_argument(
+        '--exclude-instrument', action='append', default=[],
+        metavar='CODE', help='Explicitly remove a selected instrument without industry backfill',
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     try:
@@ -29,6 +35,12 @@ def main():
             report = select_industry_leaders(
                 args.database, per_industry=args.per_industry, market_cap_date=args.market_cap_date,
             )
+            if args.exclude_instrument:
+                report = exclude_universe_instruments(
+                    report,
+                    {symbol: 'user_excluded_historical_data_gaps'
+                     for symbol in args.exclude_instrument},
+                )
             atomic_json(run.artifact, report)
             csv_path = run.directory / 'industry-leaders.csv'
             with csv_path.open('x', encoding='utf-8-sig', newline='') as stream:

@@ -36,7 +36,8 @@ python -m tools.select_industry_leaders
 
 该产物是**候选池，不是持仓清单或已训练模型**；候选股票数量与最多 30 个
 持仓槽位分开。现有逐股训练入口不会自动切换到这个股票池；
-共享组合训练接线与价格覆盖核验完成前，不能把旧 MAE 训练当作新组合训练。
+共享模型代码也不会自动运行正式训练。价格覆盖门禁未通过前，不得把旧 MAE
+训练或新模型的合成测试当作新组合训练结果。
 
 ### 新行业池的统一行情检查
 
@@ -457,3 +458,79 @@ python -m tools.audit_fractional_execution_readiness `
 目前两种 fractional 模拟器尚未接入这些执行字段，也缺少完整涨跌停成交、
 税务批次、历史风险状态和流动性规则，故门禁明确返回 `blocked`、
 `simulation_executed=false`，不计算或输出所谓实盘收益。
+
+## 共享组合 LSTM 模型代码（研究接口 v1）
+
+新增 `research/portfolio_lstm.py`，与逐股 MAE 训练入口隔离。它为所有候选股
+共享同一个 LSTM，输入是当日复权价格的因果特征：分数差分对数收盘价、对数收益、
+日内对数振幅、隔夜跳空和对数成交量变化。每只股票可保存自己的差分权重；
+共享特征缩放器只能由训练序列拟合。缺失行情或停牌会切断序列，不填价、不跨缺口
+构造特征。模型输出是可比较的研究分数，不是收益保证或下单指令。
+
+组合目标最多 30 个等权槽位、总仓位 95%，空槽位留现金；新开仓使用 `0.002`
+信号阈值，已有持仓在成本阈值带内保留。`portfolio_growth_loss` 是便于反向传播的
+净对数增长代理目标，含买卖费率；它不是精确回撤或真实成交模拟。训练函数
+`train_shared_model` 默认只优化该代理目标，不选择合格模型。只有提供独立的组合模拟
+验证回调及明确的验证年份列表，且回调完整返回每个年份的最大回撤并全部不超过 20%，
+才会按组合收益选择检查点；没有合格检查点时不放宽门禁。未提供验证回调时只返回最后
+训练权重，并明确标记未选型。
+
+模型包由 `save_model_bundle` 写入一个此前不存在的目录；正式运行建议放在
+`research_charts/runs/<run-id>/model/`，以便与该次训练及验证报告绑定。**目前没有
+生成新的训练权重**；调用此函数时传入的目录才是实际保存位置：
+
+- `model.pt`：仅含共享网络的权重。
+- `manifest.json`：网络配置、特征名、股票池签名、每股差分权重、共享缩放器、
+  `tushare-factor-portfolio-research-v1` 价格协议、训练/验证元信息及权重 SHA256。
+
+用 `load_model_bundle` 校验协议和权重哈希后加载；`predict_scores` 接受完整的交易日历、
+截至预测日的逐股行情并批量生成分数。未知股票会报错；预测日无可交易行情或连续历史
+不足的股票会在 exclusions 返回明确原因。`select_positions` 再将分数转换为最多 30 个
+目标仓位。该入口不连接券商。每个包的 `live_trading_eligible` 固定为 `false`；
+历史 ST、前视偏差、名义成交价与执行限制没有因此获得认证。
+
+在正式训练前仍须重新生成最新股票池并通过 `audit_portfolio_history`。缺口审计被阻断时，
+不得启动这批正式训练、删除旧权重/缓存或把模型包标记为已训练；该模块和合成测试仅验证
+模型代码可保存、重载与推理。
+
+### 经用户批准的 8 股排除与组合搜索
+
+针对已审计发现的未解释报价缺口，用户明确要求剔除整只股票，不按行业第六名补位。
+`select_industry_leaders` 支持重复指定 `--exclude-instrument`；新的签名快照会保留父签名、
+每只排除原因及 `explicit_user_exclusions_without_industry_backfill` 策略。2026-10-30
+快照 `run-000002` 因此由 554 只缩至 546 只；全区间审计
+`industry-price-audit-2026-10-30-excluded-8.json` 已通过，行情仍统一使用 Tushare。
+
+正式搜索固定采用 2012、2013、2014 三个逐年验证折，两种差分方法共 20 次试验、
+seed 42、最多 120 epoch、patience 15；每折均从 100000 元现金独立开始。每个 epoch
+都按连续交易日计算可微代理目标，并以次日开盘、30 个固定槽位、费用和停牌冻结规则
+执行离散组合验证。只有每个验证年的最大回撤均不超过 20% 的检查点/试验才可入选；
+缺少通过项时不放宽门槛。
+
+可按以下命令启动签名股票池上的搜索；数据库保持只读，日志、Optuna 进度和折内模型包
+写入新编号的 `portfolio-search` 运行目录：
+
+```powershell
+python -m tools.tune_portfolio_lstm `
+  --universe .\research_charts\runs\run-000002\results.json `
+  --audit .\research_charts\industry-price-audit-2026-10-30-excluded-8.json
+```
+
+完整搜索成功与产出合格模型是不同状态。该搜索不自动宣称完成 2016-10-14 至
+2026-10-14 的历史重评，也不将折内模型包标成最终部署模型；历史 ST 未知、池的前视/
+幸存者偏差及其他实盘限制仍需在最终报告中披露。
+
+完成且通过搜索的运行可继续最终 refit 及既有历史区间重评：
+
+```powershell
+python -m tools.finalize_portfolio_lstm `
+  --universe .\research_charts\runs\run-000002\results.json `
+  --audit .\research_charts\industry-price-audit-2026-10-30-excluded-8.json `
+  --search-run .\research_charts\runs\run-000006
+```
+
+最终权重包保存在新 `portfolio-training` 编号下的
+`models/selected/model.pt`，其 `manifest.json` 保存差分权重、共享 scaler、
+网络/交易配置、搜索验证、数据签名及完整性哈希。重评会明确报告该历史区间的
+组合收益、最大回撤、费用和成交数；即使历史回撤通过，模型也仍是研究用途，
+`live_trading_eligible=false`。

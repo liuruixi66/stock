@@ -12,7 +12,10 @@ from uuid import uuid4
 
 
 DEFAULT_RUN_ROOT = Path(__file__).resolve().parents[1] / 'research_charts' / 'runs'
-KINDS = ('fractional-training', 'fractional-search', 'rotation-training', 'portfolio-universe')
+KINDS = (
+    'fractional-training', 'fractional-search', 'rotation-training',
+    'portfolio-universe', 'portfolio-search', 'portfolio-training',
+)
 
 
 def timestamp():
