@@ -3,39 +3,25 @@
 import argparse
 from collections import defaultdict
 from datetime import date
-from html import escape
 import json
 import math
 from pathlib import Path
 from statistics import mean
-
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
 from research.fractional_results import chinese_result
 
 
-COLORS = ('#2563eb', '#e87924', '#16a085', '#9b59b6')
 METHODS = ('分数差分LSTM', '普通收益率LSTM')
-STYLE = """
-body{margin:0;background:#f1f5f9;color:#17263c;font:16px "Microsoft YaHei",sans-serif}
-main{max-width:1280px;margin:auto;padding:28px}
-h1{font-size:30px}h2{margin-top:40px;border-left:5px solid #2563eb;padding-left:12px}
-.note{padding:16px 20px;background:#fff7df;border-radius:10px;line-height:1.8}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,540px),1fr));gap:20px}
-.card{background:white;border-radius:14px;padding:18px;box-shadow:0 2px 10px #17263c0a}
-.card svg{width:100%;height:auto}.card p{color:#526175;font-size:14px;line-height:1.7}
-a{color:#2563eb}nav{display:flex;gap:20px;flex-wrap:wrap}
-table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:9px;border-bottom:1px solid #e2e8f0;text-align:right}
-th:first-child,td:first-child{text-align:left}.scroll{overflow:auto}
-"""
 
 
 def number(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ValueError(f'Expected a finite metric, got {value!r}')
     return float(value)
-
-
-def label(value):
-    return escape(str(value), quote=True)
 
 
 def chart_data(title, series, categories, *, bars=False, numeric_x=False):
@@ -60,100 +46,10 @@ def chart_data(title, series, categories, *, bars=False, numeric_x=False):
     return values, positions
 
 
-def svg_chart(title, series, categories, *, bars=False, percent=False, numeric_x=False):
-    """Render all observations; lines use real calendar spacing when dated."""
-    values, positions = chart_data(
-        title, series, categories, bars=bars, numeric_x=numeric_x,
-    )
-    low, high = min(0, min(values)), max(0, max(values))
-    padding = (high - low) * 0.08 or 1
-    low, high = low - padding, high + padding
-    left, top, width, height = 85, 65, 650, 290
-    y = lambda value: top + height * (high - value) / (high - low)
-    span = positions[-1] - positions[0] or 1
-    x = lambda index: (
-        left + width * (index + 0.5) / len(categories) if bars
-        else left + width * (positions[index] - positions[0]) / span
-    )
-    fmt = lambda value: f'{value * 100:.2f}%' if percent else f'{value:.4g}'
-    parts = [
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 455" role="img" '
-        f'aria-label="{label(title)}" style="font-family:Microsoft YaHei,sans-serif">',
-        f'<title>{label(title)}</title><rect width="780" height="455" fill="white"/>',
-        f'<text x="390" y="20" text-anchor="middle" font-size="17" fill="#17263c">{label(title)}</text>',
-    ]
-    for tick in range(6):
-        value = low + (high - low) * tick / 5
-        py = y(value)
-        parts.extend([
-            f'<line x1="{left}" y1="{py:.2f}" x2="735" y2="{py:.2f}" stroke="#e2e8f0"/>',
-            f'<text x="78" y="{py + 5:.2f}" text-anchor="end" font-size="12" fill="#526175">{fmt(value)}</text>',
-        ])
-    parts.append(f'<line x1="{left}" y1="{y(0):.2f}" x2="735" y2="{y(0):.2f}" stroke="#94a3b8"/>')
-    for index, (name, row) in enumerate(series):
-        color = COLORS[index % len(COLORS)]
-        parts.append(
-            f'<rect x="{left + index * 165}" y="37" width="12" height="12" fill="{color}"/>'
-            f'<text x="{left + 18 + index * 165}" y="48" font-size="12">{label(name)}</text>',
-        )
-        if bars:
-            bar_width = min(48, width / len(categories) * 0.8 / len(series))
-            for i, value in enumerate(row):
-                if value is None:
-                    continue
-                px = x(i) + (index - len(series) / 2) * bar_width
-                py = min(y(value), y(0))
-                parts.append(
-                    f'<rect x="{px:.2f}" y="{py:.2f}" width="{bar_width:.2f}" '
-                    f'height="{max(abs(y(value) - y(0)), 0.6):.2f}" fill="{color}">'
-                    f'<title>{label(categories[i])} · {label(name)}: {fmt(value)}</title></rect>',
-                )
-        else:
-            segment = []
-            for i, value in enumerate(row):
-                if value is None:
-                    if segment:
-                        parts.append(f'<polyline points="{" ".join(segment)}" fill="none" stroke="{color}" stroke-width="1.8"/>')
-                    segment = []
-                else:
-                    segment.append(f'{x(i):.2f},{y(value):.2f}')
-            if segment:
-                parts.append(f'<polyline points="{" ".join(segment)}" fill="none" stroke="{color}" stroke-width="1.8"/>')
-    step = max(1, math.ceil(len(categories) / (10 if bars else 6)))
-    ticks = sorted(set(range(0, len(categories), step)) | {len(categories) - 1})
-    for i in ticks:
-        text = str(categories[i])
-        transform = f' transform="rotate(-40 {x(i):.2f} 375)"' if bars else ''
-        parts.append(f'<text x="{x(i):.2f}" y="375" text-anchor="end" font-size="11"{transform}>{label(text)}</text>')
-    parts.append('</svg>')
-    return ''.join(parts)
-
-
-class Report:
-    def __init__(self, directory):
-        self.directory = directory
-        self.sections = []
-        self.count = 0
-
-    def chart(self, title, description, series, categories, **options):
-        if not any(value is not None for _, row in series for value in row):
-            return f'<article class="card"><h3>{label(title)}</h3><p>此指标全部不可用，未绘图。</p><p>{label(description)}</p></article>'
-        svg = svg_chart(title, series, categories, **options)
-        self.count += 1
-        filename = f'chart-{self.count:02d}.svg'
-        (self.directory / filename).write_text(svg, encoding='utf-8')
-        return (
-            f'<article class="card"><h3>{label(title)}</h3>{svg}'
-            f'<p>{label(description)}</p><a href="{filename}" download>下载 SVG 矢量图</a></article>'
-        )
-
-    def section(self, title, cards):
-        self.sections.append(f'<h2>{label(title)}</h2><div class="grid">{"".join(cards)}</div>')
-
-
-class SeabornReport(Report):
+class SeabornReport:
     def __init__(self, directory, image_format='png', dpi=180):
-        super().__init__(directory)
+        self.directory = directory
+        self.count = 0
         if image_format not in ('png', 'svg', 'pdf') or dpi < 72:
             raise ValueError('Static format must be png/svg/pdf and DPI must be >= 72')
         import matplotlib
@@ -381,8 +277,6 @@ def model_charts(report, data):
             break
     if extra:
         report.section('补充：已记录的训练过程', extra)
-    else:
-        report.sections.append('<p class="note">此结果未保存逐轮 loss 或逐日滚动记录，不能还原收敛曲线。以上均为真实已保存指标；后续新训练将保存逐轮记录。</p>')
     evaluations = data.get('模型效果评价', {}).get('机器学习视角', {}).get('预测方法评价', {})
     if evaluations:
         cards = []
@@ -399,8 +293,6 @@ def model_charts(report, data):
                 ])
             cards.append(report.chart(title, '同一批测试样本；百分比误差图单位为 %，MAPE 对接近零的实际收益十分敏感。缺失值不绘制。', series, keys, bars=True, percent=percent))
         report.section('测试集机器学习评价', cards)
-    else:
-        report.sections.append('<p class="note">此旧结果未保存整体 RMSE、MAPE、方向准确率，不能从 MAE 反推，未展示这些指标。可直接查看各股票真实测试 MAE。</p>')
 
 
 def financial_charts(report, backtests, capital, heading):
@@ -447,28 +339,15 @@ def financial_charts(report, backtests, capital, heading):
     ):
         cards.append(report.chart(title, description, [(name, [backtests[name][key] for key in keys]) for name in names], keys, bars=True, percent=percent))
     report.section(heading, cards)
-    keys = ['累计收益率', '年化收益率', '最大回撤', '年化波动率', '零无风险利率夏普比率', '累计交易费用', '成交笔数']
-    rows = []
-    for name in names:
-        cells = []
-        for i, key in enumerate(keys):
-            value = backtests[name][key]
-            cells.append('不可用' if value is None else (f'{number(value):.2%}' if i < 4 else f'{number(value):,.4g}'))
-        rows.append(f'<tr><td>{label(name)}</td>{"".join(f"<td>{cell}</td>" for cell in cells)}</tr>')
-    report.sections.append('<div class="card scroll"><table><tr><th>方法</th>' + ''.join(f'<th>{key}</th>' for key in keys) + '</tr>' + ''.join(rows) + '</table></div>')
 
 
-def page(title, content):
-    return f'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{label(title)}</title><style>{STYLE}</style><body><main><h1>{label(title)}</h1>{content}</main></body></html>'
-
-
-def generate(source, output, execution=None, *, image_format='html', dpi=180):
+def generate(source, output, execution=None, *, image_format='png', dpi=180):
     raw = json.loads(source.read_text(encoding='utf-8'))
-    if image_format not in ('html', 'png', 'svg', 'pdf'):
+    if image_format not in ('png', 'svg', 'pdf'):
         raise ValueError('Unsupported report format')
     is_search = 'search_version' in raw
     if is_search:
-        if image_format == 'html' or execution is not None:
+        if execution is not None:
             raise ValueError('Search reports require static images and no execution replay')
         output.mkdir(parents=True, exist_ok=False)
         report = SeabornReport(output, image_format, dpi)
@@ -480,38 +359,18 @@ def generate(source, output, execution=None, *, image_format='html', dpi=180):
         return report.count
     data = chinese_result(raw)
     parameters = data['实验参数']
-    seed = parameters['随机种子']
     output.mkdir(parents=True, exist_ok=False)
-    report = Report(output) if image_format == 'html' else SeabornReport(output, image_format, dpi)
+    report = SeabornReport(output, image_format, dpi)
     model_charts(report, data)
     financial_charts(report, data['回测结果'], parameters['初始资金'], '二、原研究模拟：金融表现')
     if execution:
         financial_charts(report, execution['子样本原模拟'], parameters['初始资金'], '三、筛选子样本：原模拟控制组')
         financial_charts(report, execution['有限交易约束模拟'], parameters['初始资金'], '四、筛选子样本：有限交易约束')
-        report.sections.append('<p class="note">' + '<br>'.join(label(note) for note in execution['解释限制']) + '</p>')
-    if image_format != 'html':
-        report.finish(source, [
-            '仅复用保存结果，不重新训练。研究模拟不是真实 A 股执行验证。',
-            '股票池存在幸存者偏差；供应商复权快照与原价均未获实盘认证。',
-            '缺失指标不绘制；逐轮损失仅限实际保存的记录，不还原未保存的训练过程。',
-        ] + (execution['解释限制'] if execution else []))
-        return report.count
-    intro = (
-        '<nav><a href="../index.html">返回报告目录</a><a href="#charts">查看图表</a></nav>'
-        f'<p>股票池种子：{label(seed)} · 测试期：{label(parameters["测试开始日期"])} — {label(parameters["测试结束日期"])}'
-        f' · 初始资金：{number(parameters["初始资金"]):,.0f} 元</p>'
-        f'<p>数据来源：{label(source.name)}。图表仅复用已保存结果，不重新训练。</p>'
-        '<p class="note">模型误差与金融收益应分开解读。股票池存在幸存者偏差；研究模拟并非实盘业绩。'
-        '费用约束复算使用事后筛选子样本，不可直接与完整股票池归因比较；未完整模拟涨跌停、股息税及历史费率。</p><div id="charts"></div>'
-    )
-    contract = data.get('价格口径约定')
-    intro += (
-        '<p class="note">价格口径：'
-        + (f'版本 {label(contract["version"])}；' if contract else '旧版未声明版本；')
-        + '供应商复权快照用于研究，不等于已认证的前/后复权；供应商 OHLC 未核验为原价。'
-        '本报告不可用于证明实盘可交易性。</p>'
-    )
-    (output / 'index.html').write_text(page(f'LSTM 研究可视化 · 种子 {seed}', intro + ''.join(report.sections)), encoding='utf-8')
+    report.finish(source, [
+        '仅复用保存结果，不重新训练。研究模拟不是真实 A 股执行验证。',
+        '股票池存在幸存者偏差；供应商复权快照与原价均未获实盘认证。',
+        '缺失指标不绘制；逐轮损失仅限实际保存的记录，不还原未保存的训练过程。',
+    ] + (execution['解释限制'] if execution else []))
     return report.count
 
 
@@ -520,8 +379,8 @@ def main():
     parser.add_argument('results', type=Path, nargs='+', help='Completed experiment JSON files')
     parser.add_argument('--output-directory', type=Path, required=True, help='New directory; refuses overwrite')
     parser.add_argument('--execution-results', type=Path, help='Optional execution sensitivity JSON')
-    parser.add_argument('--format', choices=('png', 'svg', 'pdf', 'html'), default='png',
-                        help='Default: static PNG; HTML must be explicitly requested')
+    parser.add_argument('--format', choices=('png', 'svg', 'pdf'), default='png',
+                        help='Static image format (default: PNG)')
     parser.add_argument('--dpi', type=int, default=180)
     args = parser.parse_args()
     try:
@@ -543,17 +402,12 @@ def main():
             if missing:
                 raise ValueError(f'Execution results lack exact source matches: {missing}')
         args.output_directory.mkdir(parents=True)
-        links = []
         for source in args.results:
             count = generate(
                 source, args.output_directory / source.stem,
                 execution_by_source.get(source.resolve()), image_format=args.format, dpi=args.dpi,
             )
-            links.append(f'<li><a href="{label(source.stem)}/index.html">{label(source.name)}</a> · {count} 张图</li>')
             print(f'{source.name}: {count} charts')
-        if args.format == 'html':
-            index = args.output_directory / 'index.html'
-            index.write_text(page('模型与金融指标可视化', '<p>各随机股票池独立展示；点击下方报告。所有图表均可离线查看、下载 SVG。</p><ul>' + ''.join(links) + '</ul>'), encoding='utf-8')
         print(args.output_directory.resolve())
     except (OSError, ValueError, KeyError, TypeError, ImportError) as exc:
         parser.exit(1, f'Visualization failed: {exc}\n')
