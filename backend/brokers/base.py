@@ -7,10 +7,26 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from decimal import Decimal
 from importlib import import_module
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol
 
-if TYPE_CHECKING:
-    from stockmarket.models import SimulationAccount, SimulationOrder
+
+class BrokerAccount(Protocol):
+    """券商适配器需要的账户字段；调用方无需使用 ORM。"""
+
+    broker: str
+    broker_account_id: str
+    market: str
+    trading_mode: str
+
+
+class BrokerOrder(Protocol):
+    id: int
+    symbol: str
+    side: str
+    order_type: str
+    quantity: Decimal
+    requested_price: Decimal | None
+    broker_order_id: str
 
 
 class BrokerError(RuntimeError):
@@ -95,7 +111,7 @@ def a_share_exchange(symbol: str) -> str:
 
 
 class BrokerAdapter(ABC):
-    """一个适配器实例对应一个已绑定券商账号的 SimulationAccount。"""
+    """一个适配器实例对应一个提供 BrokerAccount 字段的账户对象。"""
 
     code: str = ''
     label: str = ''
@@ -106,7 +122,7 @@ class BrokerAdapter(ABC):
     env_vars: tuple[str, ...] = ()
     notes: str = ''
 
-    def __init__(self, account: 'SimulationAccount'):
+    def __init__(self, account: BrokerAccount):
         self.account = account
 
     @property
@@ -114,15 +130,15 @@ class BrokerAdapter(ABC):
         return self.account.trading_mode == 'LIVE'
 
     @abstractmethod
-    def place_order(self, order: 'SimulationOrder') -> OrderResult:
+    def place_order(self, order: BrokerOrder) -> OrderResult:
         """向券商报单并返回券商侧的初始状态。"""
 
     @abstractmethod
-    def cancel_order(self, order: 'SimulationOrder') -> OrderResult:
+    def cancel_order(self, order: BrokerOrder) -> OrderResult:
         """撤销尚未完成的委托。"""
 
     @abstractmethod
-    def get_order(self, order: 'SimulationOrder') -> OrderResult:
+    def get_order(self, order: BrokerOrder) -> OrderResult:
         """查询单笔委托的最新状态。"""
 
     @abstractmethod

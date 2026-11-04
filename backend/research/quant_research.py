@@ -457,3 +457,262 @@ def run_sma_cross(
         'trades': trades,
         'equity_curve': equity_curve,
     }
+
+def run_next_open_sma_backtest(
+        bars: Sequence[HistoricalBar],
+        short_window: int = 5,# 短期均线窗口
+        long_window: int = 20,#长线均线窗口
+        initial_cash: float = 100000,#初始资金
+        commission_rate: float = 0.0003,# 佣金费率
+        allocation: float = 0.2,# 单笔交易资金占比
+        max_order_amount: float = 10000,# 单笔最大下单金额
+        sell_tax_rate: float = 0,# 卖出税率
+        slippage_bps: float = 2,# 滑点，单位基点
+) -> dict:
+    #收盘确认均线交叉，下一个交易日开盘执行买卖。
+    from math import isfinite
+    if short_window < 2 or long_window <= short_window:
+        raise ResearchError(
+            "均线参数必须满足 2 <= short_window < long_window"
+        )
+    #至少需要两天完整均线状态，以及后续一天的模拟成交机会。
+    if len(bars) < long_window + 2:
+        raise ResearchError(
+            f"历史数据不足，至少需要 {long_window + 2} 根 K 线"
+        )
+
+    values = (
+        initial_cash,
+        allocation,
+        max_order_amount,
+        commission_rate,
+        sell_tax_rate,
+        slippage_bps,
+    )
+    if not all(isfinite(value) for value in values):
+        raise ResearchError("资金，比例和费率必须是有限数")
+    if initial_cash <= 0 or max_order_amount <= 0:
+        raise ResearchError("初始资金和单笔上限必须大于0")
+    if not 0 < allocation <= 1:
+        raise ResearchError("allocation必须大于0且不超过1")
+    if not 0 < commission_rate < 1:
+        raise ResearchError("commission_rate必须在[0,1)之间")
+    if not 0 <= sell_tax_rate < 1:
+        raise ResearchError("sell_tax_rate必须在[0,1)之间")
+    if commission_rate + sell_tax_rate >= 1:
+        raise ResearchError("卖出税率和佣金率之和必须小于1")
+    if not 0 <= slippage_bps < 10000:
+        raise ResearchError("slippage_bps必须在[0,10000)之间")
+
+    dates = [bar.date for bar in bars]
+    if dates != sorted(set(dates)):
+        raise ResearchError("K线日期必须唯一且按时间升序排列")
+
+    for bar in bars:
+        prices = (bar.open,bar.high,bar.low,bar.close)
+        if(
+            not all(isfinite(price) and price > 0 for price in prices)
+            or not isfinite(bar.volume) 
+            or bar.volume < 0
+            or not bar.low <= min(bar.open,bar.close)
+            or not max(bar.open,bar.close) <= bar.high
+        ):
+            raise ResearchError(f"无效日k线: {bar.date}")
+
+    cash = float(initial_cash)
+    shares = 0
+    closes = []
+    trades = []
+    signals = []
+    rejected_orders = []
+    equity_curve = []
+    previous_bullish = None
+    pending = None
+    slip = slippage_bps / 10000
+
+    for bar in bars:
+        #先执行前一根K线收盘后产生的信号
+        if pending is not None:
+            side,signal_date = pending
+            if bar.volume <= 0:
+                rejected_orders.append({
+                    'signal_date': signal_date.isoformat(),
+                    'date':bar.date.isoformat(),
+                    'side':side,
+                    'reason':'当日成交量为0,未模拟成交',
+                })
+            elif side == 'BUY':
+                execution_price = bar.open * (1 + slip)
+                #将佣金也计入预算，避免买入后现金不足
+                budget = min(
+                    cash / allocation,
+                    max_order_amount,
+                    cash,
+                )
+                quantity = int(
+                    budget / (execution_price * (1 + commission_rate))
+                )
+
+                quantity = int(
+                    budget / (execution_price * (1 + commission_rate))
+                )
+                quantity = quantity // 100*100
+
+                if quantity== 0:
+                    rejected_orders.append({
+                        'signal_date':signal_date.isoformt(),
+                        'date':bar.date.isoformat(),
+                        'side':side,
+                        'reason':'预算不足以买入100股并支付佣金',
+                    })
+                else:
+                    amount = quantity * execution_price
+                    fee = amount * commission_rate
+                    cash -= amount + fee
+                    shares += quantity
+                    trades.append({
+                        'signal_date':signal_date.isoformat(),
+                        'date':bar.date.isoformat(),
+                        'side':side,
+                        'price':round(execution_price,4),
+                        'quantity':quantity,
+                        'amount':round(amount,2)
+                        'fee':round(fee,4)
+                        'tax':0.0,
+                    })
+            else:
+                execution_price = bar.open * (1 - slip)
+                quantity = shares
+                amount = quantity * execution_price
+                fee = amount * commission_rate
+                tax = amount * sell_tax_rate
+                cash += amount - fee - tax
+                shares = 0
+                trades.append({
+                    'signal_date':signal_date.isoformat(),
+                    'date':bar.date.isoformat(),
+                    'side':side,
+                    'price':round(execution_price,4),
+                    'quantity':quantity,
+                    'amount':round(amount,2),
+                    'fee':round(fee,4),
+                    'tax':round(tax,4),
+                })
+            pending = None
+
+        #当日收盘后计算均线，只用于生成下一个交易日信号。
+        closes.append(float(bar.close))
+        if len(closes) >= long_window:
+            short_ma = sum(closes[-short_window:]) / short_window
+            long_ma = sum(closes[-long_window:]) / long_window
+            bullish = short_ma > long_ma
+            side = None
+            if previous_bullish is not None:
+                if bullish and not previous_bullish and shares == 0:
+                    side = 'BUY'
+                elif not bullish and previous_bullish and shares > 0:
+                    side = "SELL"
+
+            if side is not None:
+                pending = (side,bar.date)
+                signals.append({
+                    'date':bar.date.isoformat(),
+                    'side':side,
+                    'short_ma':round(short_ma,6),
+                    'long_ma':round(long_ma,6)
+                })
+            previous_bullish = bullish
+        equity_curve.append({
+            'date': bar.date.isoformat(),
+            'cash':round(cash,2),
+            'shares':shares,
+            'equity':round(cash + shares * bar.close,2),
+        })
+    final_equity = cash + shares * bars[-1].close
+    
+    peak = initial_cash
+    max_drawdown = 0.0
+    for point in equity_curve:
+        peak = max(peak,point['equity'])
+        max_drawdown = min(
+            max_drawdown,
+            point['equity'] / peak -1,
+        )
+    pending_at_end = None
+    if pending is not None:
+        pending_at_end = {
+            'side':pending[0],
+            'signal_date':pending[1].isoformat,
+            'reason':'回测结束，没有下一根k线用于成交',
+        }
+    return{
+        'strategy':'sma_cross_next_open',
+        'mode':'historcal_backtest_only',
+        'parameters':{
+            'short_window':short_window,
+            "long_window":long_window,
+            'allocation':allocation,
+            'max_order_amount':max_order_amount,
+            'commission_rate':commission_rate,
+            'sell_tax_rate':sell_tax_rate,
+            'slippage_bps':slippage_bps,
+        },
+        'initial_cash':round(initial_cash,2),
+        'final_cash':round(cash,2),
+        'final_shares':shares,
+        'final_equity':round(final_equity,2),
+        'total_return':round(
+            (final_equity / initial_cash -1) * 100,
+            4,
+        ),
+        'max_drawdown':round(max_drawdown * 100,4),
+        'trade_count':len(trades),
+        'signals':signals,
+        'trades':trades,
+        "rejected_orders":rejected_orders,
+        'pending_at_end':pending_at_end,
+        "equity_curve":equity_curve
+    }
+
+def main():
+    import argparse
+    import json
+    import os
+    from datetime import date
+    parser = argparse.ArgumentParser(
+        description="A股均线历史回测"
+    )
+    import django
+    django.setup()
+
+    from market_data import MarketDataError
+    from market_data.database_history import SQLiteHistoryProvider
+
+    try:
+        provider = SQLiteHistoryProvider('A')
+        bars = provider.get_history(args.symbol, args.start, args.end)
+
+        result = run_next_open_sma_backtest(
+            bars=bars,
+            initial_cash=args.initial_cash,
+            short_window=args.short,
+            long_window=args.long,
+            allocation=args.allocation,
+            max_order_amount=args.max_order_amount,
+            commission_rate=args.commission_rate,
+            sell_tax_rate=args.sell_tax_rate,
+            slippage_bps=args.slippage_bps,
+        )
+    except (MarketDataError, ResearchError) as exc:
+        parser.exit(2, f'回测失败：{exc}\n')
+
+    result['symbol'] = args.symbol.upper()
+    result['data_source'] = 'database'
+    result['datasets'] = provider.datasets
+
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == '__main__':
+    main()
+    

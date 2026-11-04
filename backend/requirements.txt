@@ -1,8 +1,4 @@
-# Django核心
-Django>=4.2.0,<5.0.0
-django-cors-headers>=4.0.0
-
-# 数据库
+# 旧版行情/选股数据库工具
 PyMySQL>=1.0.0
 
 # 数据分析
@@ -19,9 +15,6 @@ backtrader>=1.9.76.123
 tushare>=1.2.89  # 可选，用于获取股票数据
 akshare>=1.10.0  # 可选，替代数据源
 requests>=2.31.0
-
-# API文档
-drf-yasg>=1.21.0  # 可选，用于API文档生成
 
 # 开发工具（可选）
 python-dotenv>=1.0.0  # 环境变量管理

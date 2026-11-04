@@ -5,7 +5,7 @@ from datetime import date
 import logging
 from pathlib import Path
 
-from config.settings import STOCKS_DATABASE_PATH
+from config.runtime import STOCKS_DATABASE_PATH
 from research.fractional_tuning import SearchSettings, run_search
 from research.experiment_runs import tracked_run
 

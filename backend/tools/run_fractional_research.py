@@ -16,7 +16,7 @@ from pathlib import Path
 import sys
 from time import strftime
 
-from config.settings import STOCKS_DATABASE_PATH
+from config.runtime import STOCKS_DATABASE_PATH
 from research.database_fractional import load_fractional_database
 from research.fractional_forecast import (
     DifferencingError, ForecastConfig, simulate_long_only,

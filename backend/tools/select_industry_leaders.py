@@ -7,7 +7,7 @@ import json
 import logging
 from pathlib import Path
 
-from config.settings import STOCKS_DATABASE_PATH
+from config.runtime import STOCKS_DATABASE_PATH
 from market_data.industry_universe import (
     exclude_universe_instruments, select_industry_leaders, verify_industry_universe,
 )

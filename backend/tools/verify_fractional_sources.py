@@ -18,7 +18,7 @@ import time
 
 import requests
 
-from config.settings import STOCKS_DATABASE_PATH
+from config.runtime import STOCKS_DATABASE_PATH
 from research.fractional_results import chinese_result
 
 

@@ -4,14 +4,11 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from decimal import Decimal
+from typing import Any, Iterable
 
 from market_data import MarketDataError, get_provider
 
-from stockmarket.models import SimulationAccount
-from stockmarket.models import SimulationOrder
-
-
-def _fifo_realized_pnl(orders: list[SimulationOrder]) -> dict[int, Decimal]:
+def _fifo_realized_pnl(orders: list[Any]) -> dict[int, Decimal]:
     """返回 {卖单id: 平仓盈亏}，买入成本含佣金，卖出收入扣佣金与税费。"""
     lots: dict[str, deque[list[Decimal]]] = defaultdict(deque)
     realized: dict[int, Decimal] = {}
@@ -41,14 +38,18 @@ def _fifo_realized_pnl(orders: list[SimulationOrder]) -> dict[int, Decimal]:
     return realized
 
 
-def build_account_analytics(account: SimulationAccount) -> dict:
+def build_account_analytics(
+    account: Any, orders: Iterable[Any], positions: Iterable[Any],
+) -> dict:
     """汇总账户资产、持仓和成交表现。
 
     已成交订单按时间和订单编号排序，并使用 FIFO 计算已实现盈亏；
+    调用方提供账户、订单和持仓记录（属性对象，不依赖 ORM）。
     当前持仓则通过行情提供方估值，行情不可用时回退到持仓均价。
     """
-    filled = list(
-        SimulationOrder.objects.filter(account=account, status='FILLED').order_by('created_at', 'id')
+    filled = sorted(
+        (order for order in orders if order.status == 'FILLED'),
+        key=lambda order: (order.created_at, order.id),
     )
     realized_map = _fifo_realized_pnl(filled)
 
@@ -95,10 +96,11 @@ def build_account_analytics(account: SimulationAccount) -> dict:
     trades.reverse()
 
     provider = get_provider(account.market)
+    position_records = positions
     positions = []
     market_value = Decimal('0')
     unrealized = Decimal('0')
-    for position in account.positions.all():
+    for position in position_records:
         try:
             current_price = Decimal(str(provider.get_quote(position.symbol).price))
         except MarketDataError:

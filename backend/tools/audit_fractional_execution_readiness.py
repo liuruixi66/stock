@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import sqlite3
 
-from config.settings import STOCKS_DATABASE_PATH
+from config.runtime import STOCKS_DATABASE_PATH
 
 
 TABLES = (

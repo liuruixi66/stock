@@ -10,7 +10,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
-from config.settings import STOCKS_DATABASE_PATH
+from config.runtime import STOCKS_DATABASE_PATH
 from market_data.price_basis import (
     ACTION_COLUMNS, PRICE_COLUMNS, adjusted_ohlc, frame_digest, research_price_contract,
 )

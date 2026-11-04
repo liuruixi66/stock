@@ -4,7 +4,7 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
-from django.conf import settings
+from config.runtime import STOCKS_DATABASE_PATH
 
 from .local_history import _validate_bars, normalize_symbol
 from .providers import HistoricalBar, Market, MarketDataError
@@ -27,7 +27,7 @@ class SQLiteHistoryProvider:
         if self.market not in (Market.A_SHARE, Market.US):
             raise MarketDataError('The stocks database supports A and US markets only')
         self.database_path = Path(
-            database_path if database_path is not None else settings.STOCKS_DATABASE_PATH,
+            database_path if database_path is not None else STOCKS_DATABASE_PATH,
         )
         self.datasets: dict[str, dict] = {}
 

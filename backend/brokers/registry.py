@@ -1,14 +1,11 @@
-"""券商注册表：根据账户的 broker 字段返回适配器实例，并提供给前端展示的目录。"""
+"""券商注册表：根据账户的 broker 字段返回独立适配器实例。"""
 
 from __future__ import annotations
 
 from importlib import import_module
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from .base import BrokerAdapter, BrokerError
-
-if TYPE_CHECKING:
-    from stockmarket.models import SimulationAccount
+from .base import BrokerAccount, BrokerAdapter, BrokerError
 
 SIMULATED = 'SIM'
 
@@ -39,7 +36,7 @@ def is_external(code: str) -> bool:
     return code.upper() != SIMULATED
 
 
-def get_broker(account: 'SimulationAccount') -> BrokerAdapter:
+def get_broker(account: BrokerAccount) -> BrokerAdapter:
     if not is_external(account.broker):
         raise BrokerError('内置模拟账户没有外部券商适配器')
     return adapter_class(account.broker)(account)

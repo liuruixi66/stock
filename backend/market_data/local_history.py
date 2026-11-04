@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from django.conf import settings
+from config.runtime import HISTORICAL_DATA_DIR
 
 from .providers import HistoricalBar, Market, MarketDataError, get_provider
 
@@ -68,9 +68,7 @@ class LocalHistoryProvider:
             self.market = Market(str(market).upper())
         except ValueError as exc:
             raise MarketDataError(f'Unsupported market: {market}') from exc
-        self.root = Path(root if root is not None else getattr(
-            settings, 'HISTORICAL_DATA_DIR', settings.BASE_DIR / 'data' / 'history' / '2024_2026',
-        ))
+        self.root = Path(root if root is not None else HISTORICAL_DATA_DIR)
         self.datasets: dict[str, dict] = {}
 
     def path(self, symbol: str) -> Path:
@@ -101,7 +99,7 @@ class LocalHistoryProvider:
             self.datasets[normalized] = metadata
             return selected
         except FileNotFoundError as exc:
-            raise MarketDataError(f'Local history missing: {path}. Run manage.py download_history first; network fallback is disabled.') from exc
+            raise MarketDataError(f'Local history missing: {path}. Run python -m tools.download_history first; network fallback is disabled.') from exc
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise MarketDataError(f'Invalid local history file: {path}: {exc}') from exc
 

@@ -21,7 +21,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
-from config.settings import STOCKS_DATABASE_PATH
+from config.runtime import STOCKS_DATABASE_PATH
 from research.fractional_execution import simulate_cash_shares
 from research.fractional_forecast import (
     DatabaseRandomUniverse, DifferencingError, simulate_long_only, validate_prices,

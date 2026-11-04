@@ -146,8 +146,5 @@ def main():
 
 
 if __name__ == '__main__':
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
-    import django
-    django.setup()
     from research.screening import get_mysql_df
     main()
