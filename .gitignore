@@ -136,3 +136,9 @@ dist/
 
 # Generated offline research charts
 backend/research_charts/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.txt

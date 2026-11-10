@@ -10,7 +10,7 @@ import math
 import sys
 
 
-DEVICE = 'cpu'
+DEVICE = 'cuda'
 
 
 def diagnostic_weights(order=0.5, threshold=0.001, max_lags=1000):
